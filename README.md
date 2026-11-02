@@ -30,6 +30,8 @@ O teste de e-mail sobe uma caixa de testes própria (GreenMail) e a remove no fi
 
 A demonstração cria dois clientes de exemplo, chamados e pessoas, e abre a tela em http://127.0.0.1:8720. As senhas provisórias ficam em `/opt/panthera-track/demonstracao.json`, com permissão 600. O cookie sem `Secure` da demonstração só serve para endereço local.
 
+Para testar sem o segundo fator, suba com `TRACK_SEM_MFA=1`. A chave só vale com `TRACK_COOKIE_SEGURO=0`, em endereço local: em produção ela é ignorada.
+
 ```bash
 sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/demonstracao.py'
 ```

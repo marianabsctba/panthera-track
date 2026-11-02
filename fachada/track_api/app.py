@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -40,17 +41,23 @@ app.mount("/estatico", StaticFiles(directory=_ESTATICO), name="estatico")
 @app.middleware("http")
 async def _cabecalhos(request, chamar):
     resposta = await chamar(request)
+    # A tela injeta uma tag de estilo: só aceita a que traz a chave desta resposta.
+    chave = getattr(request.state, "chave_de_estilo", None)
+    estilo = f"style-src 'self' 'nonce-{chave}'; " if chave else ""
     resposta.headers["Content-Security-Policy"] = (
-        "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        f"default-src 'self'; {estilo}img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
     resposta.headers["X-Content-Type-Options"] = "nosniff"
     resposta.headers["Referrer-Policy"] = "no-referrer"
-    resposta.headers["Cache-Control"] = "no-store"
+    # Dado de chamado nunca fica guardado; a tela sempre confere se há versão nova.
+    resposta.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api/") else "no-cache"
     return resposta
 
 
 @app.get("/", include_in_schema=False)
-def console():
-    return FileResponse(_ESTATICO / "console.html")
+def console(request: Request):
+    chave = secrets.token_urlsafe(16)
+    request.state.chave_de_estilo = chave
+    return HTMLResponse((_ESTATICO / "novo" / "index.html").read_text(encoding="utf-8").replace("__CHAVE__", chave))
 
 
 @app.exception_handler(MotorIndisponivel)

@@ -83,10 +83,14 @@ def principal():
         # Tela e cabeçalhos
         r = httpx.get(API + "/")
         confere("tela é servida", r.status_code == 200 and "Panthera" in r.text)
-        confere("tela tem CSP sem script inline", "default-src 'self'" in r.headers.get("content-security-policy", "") and "<script>" not in r.text)
-        js = httpx.get(API + "/estatico/console.js").text + r.text
+        csp = r.headers.get("content-security-policy", "")
+        chave = re.search(r'name="track-chave-de-estilo" content="([^"]+)"', r.text)
+        confere("tela tem CSP sem script inline", "default-src 'self'" in csp and "unsafe-inline" not in csp and "<script>" not in r.text, csp)
+        confere("estilo só com a chave desta resposta", bool(chave) and f"'nonce-{chave.group(1)}'" in csp and chave.group(1) != "__CHAVE__", csp)
+        js = r.text + "".join(httpx.get(API + a).text for a in re.findall(r'(?:src|href)="(/estatico/novo/[^"]+\.(?:js|css))"', r.text))
+        confere("tela carrega o código construído", len(js) > 100000, len(js))
         confere("tela não revela a ferramenta", "glpi" not in js.lower())
-        confere("simbolo é servido", httpx.get(API + "/estatico/pantera.webp").status_code == 200)
+        confere("símbolo é servido", httpx.get(API + "/estatico/pantera.webp").status_code == 200)
 
         # Entrada
         c = cliente_http()

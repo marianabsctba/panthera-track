@@ -25,6 +25,7 @@ sys.path.insert(0, str(RAIZ / "fachada"))
 
 from track_api import provisao  # noqa: E402
 from track_api.dominio import calcular_sla  # noqa: E402
+from track_api.sessao import etapa  # noqa: E402
 
 API = "http://127.0.0.1:8710"
 PRAZOS = {"critica": 4, "alta": 8, "media": 24, "baixa": 48, "consulta": 72}
@@ -86,8 +87,27 @@ def conferir_contas_de_sla():
     confere("pausa em curso empurra o prazo", p["segundos_restantes"] == 4 * 3600 - 3600, p)
 
 
+def conferir_chave_de_testes_do_mfa():
+    sessao = {"trocar_senha": False, "mfa_ativo": False, "mfa_ok": False}
+    guardado = {k: os.environ.pop(k, None) for k in ("TRACK_SEM_MFA", "TRACK_COOKIE_SEGURO")}
+    try:
+        confere("sem a chave, o segundo fator é obrigatório", etapa(sessao) == "cadastrar_mfa")
+        os.environ["TRACK_SEM_MFA"] = "1"
+        confere("com cookie seguro, a chave é ignorada", etapa(sessao) == "cadastrar_mfa")
+        os.environ["TRACK_COOKIE_SEGURO"] = "1"
+        confere("com cookie seguro explícito, a chave é ignorada", etapa(sessao) == "cadastrar_mfa")
+        os.environ["TRACK_COOKIE_SEGURO"] = "0"
+        confere("em ambiente local, a chave dispensa o segundo fator", etapa(sessao) == "pronto")
+        confere("a chave não dispensa a troca da senha provisória", etapa({**sessao, "trocar_senha": True}) == "trocar_senha")
+    finally:
+        os.environ.pop("TRACK_SEM_MFA", None)
+        os.environ.pop("TRACK_COOKIE_SEGURO", None)
+        os.environ.update({k: v for k, v in guardado.items() if v is not None})
+
+
 def principal():
     conferir_contas_de_sla()
+    conferir_chave_de_testes_do_mfa()
     receptor = HTTPServer(("0.0.0.0", 0), Receptor)
     threading.Thread(target=receptor.serve_forever, daemon=True).start()
     # O motor roda em contêiner: precisa do endereço da máquina, não do local.

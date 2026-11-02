@@ -34,9 +34,16 @@ def _hash_token(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _mfa_desligado_para_testes():
+    """Só em ambiente local: com o cookie seguro de produção, a chave é ignorada e o segundo fator continua obrigatório."""
+    return os.getenv("TRACK_SEM_MFA") == "1" and os.getenv("TRACK_COOKIE_SEGURO", "1") != "1"
+
+
 def etapa(sessao):
     if sessao["trocar_senha"]:
         return "trocar_senha"
+    if _mfa_desligado_para_testes():
+        return "pronto"
     if not sessao["mfa_ativo"]:
         return "cadastrar_mfa"
     if not sessao["mfa_ok"]:
