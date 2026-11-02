@@ -22,6 +22,14 @@ sudo sh testes/preparar.sh
 sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/testar_fatia.py'
 ```
 
+## Ver a tela
+
+A demonstração cria um cliente de exemplo e abre a tela em http://127.0.0.1:8720. Ela roda só em endereço local e sem login, então não serve para produção.
+
+```bash
+sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/demonstracao.py'
+```
+
 ## Criar um cliente
 
 As credenciais vão só para o arquivo indicado, com permissão 600.

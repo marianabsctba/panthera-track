@@ -166,6 +166,14 @@ def _transicao(eu, numero, permitidos, tipo, autor, acao):
     return saida
 
 
+@app.get("/api/v1/chamados")
+def listar(eu: Identidade = Depends(autenticar)):
+    with banco.transacao(eu.cliente["id"]) as conn:
+        linhas = conn.execute("SELECT * FROM chamados ORDER BY numero DESC LIMIT 100").fetchall()
+    motor = motor_do_cliente(eu.cliente)
+    return [representar(linha, motor.chamado(linha["numero"])) for linha in linhas]
+
+
 @app.get("/api/v1/chamados/{numero}")
 def consultar(numero: int, eu: Identidade = Depends(autenticar)):
     with banco.transacao(eu.cliente["id"]) as conn:

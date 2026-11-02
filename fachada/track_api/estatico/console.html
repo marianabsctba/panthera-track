@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panthera Track</title>
+<style>
+:root { --fundo:#0b0b0d; --painel:#151518; --painel2:#1d1d22; --linha:#2b2b31; --texto:#f4f1f3; --apagado:#a39ca2; --rosa:#ff2d8d; --rosa2:#ff7ab8; --alerta:#ff5c5c; --ok:#5fd38d; --espera:#f5c04f; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--fundo); color:var(--texto); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 24px; border-bottom:1px solid var(--linha); flex-wrap:wrap; }
+h1 { margin:0; font-size:20px; letter-spacing:.2px; } h1 span { color:var(--rosa); }
+h2 { margin:0 0 4px; font-size:18px; } h3 { margin:20px 0 8px; font-size:13px; color:var(--apagado); text-transform:uppercase; letter-spacing:.6px; }
+button { font:inherit; color:var(--texto); background:var(--painel2); border:1px solid var(--linha); border-radius:8px; padding:7px 12px; cursor:pointer; }
+button:hover { border-color:var(--rosa); } button.forte { background:var(--rosa); border-color:var(--rosa); color:#14060d; font-weight:600; }
+input,select,textarea { font:inherit; color:var(--texto); background:var(--fundo); border:1px solid var(--linha); border-radius:8px; padding:8px 10px; width:100%; }
+main { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(320px,1fr); gap:16px; padding:16px 24px; align-items:start; }
+.resumo { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:16px; }
+.cartao { background:var(--painel); border:1px solid var(--linha); border-radius:10px; padding:10px 14px; }
+.cartao b { display:block; font-size:22px; } .cartao small { color:var(--apagado); }
+.painel { background:var(--painel); border:1px solid var(--linha); border-radius:10px; padding:16px; }
+table { width:100%; border-collapse:collapse; } th { text-align:left; font-size:12px; color:var(--apagado); font-weight:500; padding:8px 12px; border-bottom:1px solid var(--linha); }
+td { padding:11px 12px; border-bottom:1px solid var(--linha); vertical-align:top; } tr.item { cursor:pointer; } tr.item:hover td, tr.sel td { background:var(--painel2); }
+.lista { background:var(--painel); border:1px solid var(--linha); border-radius:10px; overflow-x:auto; }
+.selo { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12px; border:1px solid var(--linha); white-space:nowrap; }
+.c-critica { color:#14060d; background:var(--rosa); border-color:var(--rosa); font-weight:600; } .c-alta { color:var(--rosa2); border-color:var(--rosa2); }
+.s-aguardando_cliente { color:var(--espera); border-color:var(--espera); } .s-resolvido,.s-encerrado { color:var(--ok); border-color:var(--ok); }
+.apagado { color:var(--apagado); font-size:13px; } .tarde { color:var(--alerta); } .pausa { color:var(--espera); }
+.acoes { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; } .acoes textarea { flex-basis:100%; }
+.dados { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin:12px 0 0; } .dados dt { color:var(--apagado); } .dados dd { margin:0; }
+.evento { padding:8px 0; border-top:1px solid var(--linha); } .evento:first-child { border-top:0; }
+form.novo { display:grid; gap:8px; }
+dialog { background:var(--painel); color:var(--texto); border:1px solid var(--rosa); border-radius:12px; width:min(460px,calc(100vw - 32px)); padding:20px; } dialog::backdrop { background:#000a; }
+#erro { color:var(--alerta); min-height:20px; margin-top:8px; font-size:13px; }
+@media (max-width:860px) { main { grid-template-columns:1fr; padding:12px 16px; } header { padding:12px 16px; } .resumo { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Panthera <span>Track</span></h1>
+  <button class="forte" id="abrir">Simular alerta do SIEM</button>
+</header>
+<main>
+  <section>
+    <div class="resumo" id="resumo"></div>
+    <div class="lista"><table>
+      <thead><tr><th>Nº</th><th>Chamado</th><th>Criticidade</th><th>Situação</th><th>SLA</th></tr></thead>
+      <tbody id="linhas"></tbody>
+    </table></div>
+  </section>
+  <aside class="painel" id="detalhe"><span class="apagado">Escolha um chamado para ver o andamento.</span></aside>
+</main>
+<dialog id="dialogo">
+  <form class="novo" id="novo" method="dialog">
+    <h2>Alerta virou incidente</h2>
+    <label>Título <input name="titulo" required maxlength="255" value="Atividade suspeita em servidor"></label>
+    <label>Descrição <textarea name="descricao" required rows="3">Alerta correlacionado pelo SIEM.</textarea></label>
+    <label>Criticidade <select name="criticidade">
+      <option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Média</option><option value="baixa">Baixa</option><option value="consulta">Consulta</option>
+    </select></label>
+    <div class="acoes"><button class="forte" value="ok">Abrir chamado</button><button value="nao" formnovalidate>Cancelar</button></div>
+  </form>
+</dialog>
+<script>
+const CRIT = {critica:"Crítica",alta:"Alta",media:"Média",baixa:"Baixa",consulta:"Consulta"};
+const SIT = {aberto:"Aberto",em_andamento:"Em andamento",aguardando_cliente:"Aguardando cliente",resolvido:"Resolvido",encerrado:"Encerrado"};
+const EV = {aberto:"Abertura",em_andamento:"Em andamento",andamento:"Andamento registrado",aguardando_cliente:"Aguardando o cliente",resolvido:"Resolução",encerrado:"Encerramento"};
+let chamados = [], selecionado = null, lidoEm = Date.now();
+const $ = id => document.getElementById(id);
+function el(tag, props, ...filhos) { const e = Object.assign(document.createElement(tag), props || {}); e.append(...filhos); return e; }
+function semHtml(t) { return new DOMParser().parseFromString(new DOMParser().parseFromString(t || "", "text/html").body.textContent, "text/html").body.textContent; }
+function hora(t) { return t ? new Date(t).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"}) : "-"; }
+function duracao(s) { const n = Math.abs(s), h = Math.floor(n/3600), m = Math.floor(n%3600/60), x = n%60; return h ? `${h}h ${String(m).padStart(2,"0")}min` : `${m}min ${String(x).padStart(2,"0")}s`; }
+async function api(metodo, caminho, corpo) {
+  const r = await fetch(caminho, {method:metodo, headers:{"Content-Type":"application/json"}, body:corpo ? JSON.stringify(corpo) : undefined});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Confira os campos e tente de novo");
+  return d;
+}
+function textoSla(c) {
+  const s = c.sla;
+  if (s.segundos_restantes === null) return el("span", {className:"apagado", textContent:"Sem prazo"});
+  if (c.status === "resolvido" || c.status === "encerrado") return el("span", {className:s.estourado ? "tarde" : "", textContent:(s.estourado ? "Fora do prazo, " : "No prazo, ") + duracao(s.segundos_corridos)});
+  if (s.pausado) return el("span", {className:"pausa", textContent:"Pausado, restam " + duracao(s.segundos_restantes)});
+  const resta = s.segundos_restantes - Math.floor((Date.now() - lidoEm)/1000);
+  return el("span", {className:resta < 0 ? "tarde" : "", textContent:(resta < 0 ? "Estourado há " : "Restam ") + duracao(resta)});
+}
+function desenhaLista() {
+  const r = $("resumo"); r.replaceChildren(...Object.keys(SIT).map(k => el("div", {className:"cartao"}, el("b", {textContent:chamados.filter(c => c.status === k).length}), el("small", {textContent:SIT[k]}))));
+  $("linhas").replaceChildren(...chamados.map(c => {
+    const tr = el("tr", {className:"item" + (c.numero === selecionado ? " sel" : "")},
+      el("td", {textContent:c.numero}), el("td", {}, c.titulo, el("div", {className:"apagado", textContent:"Aberto em " + hora(c.aberto_em)})),
+      el("td", {}, el("span", {className:"selo c-" + c.criticidade, textContent:CRIT[c.criticidade]})),
+      el("td", {}, el("span", {className:"selo s-" + c.status, textContent:SIT[c.status]})), el("td", {}, textoSla(c)));
+    tr.onclick = () => abrir(c.numero); return tr;
+  }));
+}
+async function carregar() { chamados = await api("GET", "/api/v1/chamados"); lidoEm = Date.now(); desenhaLista(); }
+function acao(rotulo, caminho, opcoes = {}) {
+  const b = el("button", {textContent:rotulo, className:opcoes.forte ? "forte" : ""});
+  b.onclick = async () => {
+    const corpo = opcoes.campo ? {[opcoes.campo]: $("texto").value.trim() || (opcoes.padrao ?? "")} : undefined;
+    b.disabled = true;
+    try { await api("POST", `/api/v1/chamados/${selecionado}/${caminho}`, corpo); await carregar(); await abrir(selecionado); }
+    catch (e) { $("erro").textContent = e.message; b.disabled = false; }
+  };
+  return b;
+}
+async function abrir(numero) {
+  selecionado = numero; desenhaLista();
+  const c = chamados.find(x => x.numero === numero), h = await api("GET", `/api/v1/chamados/${numero}/historico`);
+  const btns = [];
+  if (c.status === "aberto") btns.push(acao("Assumir atendimento", "atender", {forte:true, campo:"atendente", padrao:"Analista de plantão"}));
+  if (c.status === "em_andamento") btns.push(acao("Resolver", "resolver", {forte:true, campo:"texto"}), acao("Registrar andamento", "andamento", {campo:"texto"}), acao("Aguardar cliente", "pausar", {campo:"texto"}));
+  if (c.status === "aguardando_cliente") btns.push(acao("Retomar", "retomar", {forte:true}), acao("Registrar andamento", "andamento", {campo:"texto"}));
+  if (c.status === "resolvido") btns.push(acao("Encerrar", "encerrar", {forte:true}));
+  const dica = c.status === "aberto" ? "Nome de quem assume" : "Solução, andamento ou motivo da espera";
+  const pedeTexto = c.status === "aberto" || c.status === "em_andamento" || c.status === "aguardando_cliente";
+  $("detalhe").replaceChildren(
+    el("div", {className:"apagado", textContent:"Chamado nº " + c.numero + (c.id_externo ? " · " + c.id_externo : "")}), el("h2", {textContent:c.titulo}),
+    el("span", {className:"selo c-" + c.criticidade, textContent:CRIT[c.criticidade]}), " ", el("span", {className:"selo s-" + c.status, textContent:SIT[c.status]}),
+    el("p", {textContent:semHtml(c.descricao)}),
+    el("dl", {className:"dados"},
+      el("dt", {textContent:"Solicitante"}), el("dd", {textContent:c.solicitante}), el("dt", {textContent:"Atendente"}), el("dd", {textContent:c.atendente || "-"}),
+      el("dt", {textContent:"Abertura"}), el("dd", {textContent:hora(c.aberto_em)}), el("dt", {textContent:"Resolução"}), el("dd", {textContent:hora(c.resolvido_em)}),
+      el("dt", {textContent:"Encerramento"}), el("dd", {textContent:hora(c.encerrado_em)}), el("dt", {textContent:"Prazo"}), el("dd", {textContent:hora(c.sla.prazo)}),
+      el("dt", {textContent:"Tempo corrido"}), el("dd", {textContent:duracao(c.sla.segundos_corridos)}), el("dt", {textContent:"Tempo em pausa"}), el("dd", {textContent:duracao(c.sla.segundos_pausados)})),
+    el("div", {className:"acoes"}, ...(pedeTexto ? [el("textarea", {id:"texto", rows:2, placeholder:dica})] : []), ...btns),
+    el("div", {id:"erro"}),
+    el("h3", {textContent:"Histórico"}),
+    ...h.eventos.map(e => el("div", {className:"evento"}, el("b", {textContent:EV[e.tipo] || e.tipo}), el("div", {className:"apagado", textContent:hora(e.criado_em) + " · " + e.autor}))),
+    el("h3", {textContent:"Registros"}),
+    ...(h.interacoes.length ? h.interacoes.map(i => el("div", {className:"evento"}, el("b", {textContent:i.tipo === "solucao" ? "Solução" : "Andamento"}), el("div", {textContent:semHtml(i.conteudo)}), el("div", {className:"apagado", textContent:hora(i.em)}))) : [el("span", {className:"apagado", textContent:"Nada registrado ainda."})]));
+}
+$("abrir").onclick = () => $("dialogo").showModal();
+$("novo").addEventListener("submit", async ev => {
+  if (ev.submitter?.value !== "ok") return;
+  const f = new FormData($("novo"));
+  const novo = await api("POST", "/api/v1/siem/chamados", {id_externo:"alerta-" + Date.now(), titulo:f.get("titulo"), descricao:f.get("descricao"), criticidade:f.get("criticidade"), solicitante:"SIEM"});
+  await carregar(); abrir(novo.numero);
+});
+setInterval(desenhaLista, 1000); setInterval(carregar, 20000); carregar();
+</script>
+</body>
+</html>
