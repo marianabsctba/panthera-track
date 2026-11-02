@@ -1,18 +1,19 @@
 import hashlib
 import hmac
 import logging
-import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import banco, entrega, operacoes, sessao, tela
-from .dominio import ABERTO, AGUARDANDO_CLIENTE, EM_ANDAMENTO, ENCERRADO, RESOLVIDO, representar
+from . import banco, operacoes, sessao, tela
+from .dominio import (ABERTO, AGUARDANDO_CLIENTE, EM_ANDAMENTO, ENCERRADO, PADRAO_CATEGORIA, PADRAO_CRITICIDADE, PADRAO_TIPO,
+                      RESOLVIDO, Contexto, representar)
 from .motor import MotorIndisponivel, motor_do_cliente
 
 log = logging.getLogger("track.api")
@@ -22,10 +23,7 @@ _ESTATICO = Path(__file__).resolve().parent / "estatico"
 
 @asynccontextmanager
 async def _vida(_app):
-    parar = threading.Event()
-    entrega.iniciar(parar)
     yield
-    parar.set()
     banco.fechar()
 
 
@@ -103,8 +101,11 @@ class NovoChamado(BaseModel):
     id_externo: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     titulo: str = Field(min_length=1, max_length=255)
     descricao: str = Field(min_length=1, max_length=65000)
-    criticidade: str = Field(pattern="^(critica|alta|media|baixa|consulta)$")
+    criticidade: str = Field(pattern=PADRAO_CRITICIDADE)
     solicitante: str = Field(min_length=1, max_length=255)
+    tipo: str = Field(default="incidente", pattern=PADRAO_TIPO)
+    categoria: str = Field(default="outro", pattern=PADRAO_CATEGORIA)
+    contexto: Optional[Contexto] = None
 
 
 class Atendimento(BaseModel):
@@ -118,7 +119,8 @@ class Texto(BaseModel):
 @app.post("/api/v1/siem/chamados")
 def abrir_pelo_siem(novo: NovoChamado, eu: Identidade = Depends(exigir_siem)):
     saida, criado = operacoes.abrir(eu.cliente, novo.titulo, novo.descricao, novo.criticidade, novo.solicitante, "siem",
-                                    id_externo=novo.id_externo)
+                                    id_externo=novo.id_externo, tipo=novo.tipo, categoria=novo.categoria,
+                                    contexto=novo.contexto.model_dump(mode="json", exclude_none=True) if novo.contexto else None)
     return JSONResponse(saida, status_code=201 if criado else 200)
 
 
@@ -174,7 +176,7 @@ def pausar(numero: int, corpo: Texto, eu: Identidade = Depends(exigir_atendente)
     def acao(motor, _conn):
         motor.acompanhamento(numero, operacoes.html("Aguardando o cliente: " + corpo.texto))
         motor.mudar_status(numero, AGUARDANDO_CLIENTE)
-    return operacoes.transicao(eu.cliente, numero, {EM_ANDAMENTO}, "aguardando_cliente", _quem(eu, numero), acao)
+    return operacoes.transicao(eu.cliente, numero, {EM_ANDAMENTO}, "aguardando_cliente", _quem(eu, numero), acao, detalhe=corpo.texto)
 
 
 @app.post("/api/v1/chamados/{numero}/retomar")

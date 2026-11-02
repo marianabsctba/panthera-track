@@ -77,9 +77,18 @@
     <label id="campo-solicitante" hidden>Quem pediu <input name="solicitante" maxlength="255"></label>
     <label>Título <input name="titulo" required maxlength="255"></label>
     <label>Descrição <textarea name="descricao" required rows="3"></textarea></label>
+    <div class="duas">
+      <label>Tipo <select name="tipo"><option value="incidente">Incidente</option><option value="requisicao">Requisição</option></select></label>
+      <label>Categoria <select name="categoria"></select></label>
+    </div>
     <label>Criticidade <select name="criticidade">
       <option value="media">Média</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="baixa">Baixa</option><option value="consulta">Consulta</option>
     </select></label>
+    <label>Ativo ou local afetado <input name="ativo" maxlength="255"></label>
+    <div class="duas">
+      <label>Telefone para contato <input name="contato_telefone" type="tel" maxlength="20"></label>
+      <label>E-mail para contato <input name="contato_email" type="email" maxlength="320"></label>
+    </div>
     <p class="erro" id="erro-novo" role="alert"></p>
     <div class="acoes"><button class="forte">Abrir chamado</button><button type="button" id="cancelar">Cancelar</button></div>
   </form>

@@ -37,4 +37,14 @@ dialog { background:var(--painel); color:var(--texto); border:1px solid var(--ro
 .segredo, .codigos { font-family:ui-monospace,Consolas,monospace; font-size:13px; word-break:break-all; background:var(--fundo); border:1px solid var(--linha); border-radius:8px; padding:8px 10px; }
 .codigos { white-space:pre-line; columns:2; }
 main > * { min-width:0; }
+#detalhe { overflow-wrap:anywhere; } #detalhe select { min-width:0; } .dados dd { min-width:0; }
+.duas { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.codigo { font-weight:600; white-space:nowrap; }
+.barra { height:8px; border-radius:99px; background:var(--painel2); overflow:hidden; margin:4px 0 2px; }
+.barra i { display:block; height:100%; background:var(--rosa); }
+.barra.risco-b i { background:var(--espera); } .barra.tarde-b i { background:var(--alerta); } .barra.ok-b i { background:var(--ok); }
+.prazo { margin-bottom:12px; } .prazo b { display:flex; justify-content:space-between; gap:8px; font-weight:500; flex-wrap:wrap; }
+a { color:var(--rosa2); }
+.anexo-novo { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; } .anexo-novo input { flex:1 1 180px; width:auto; }
+.mono { font-family:ui-monospace,Consolas,monospace; font-size:12px; word-break:break-all; }
 @media (max-width:860px) { main { grid-template-columns:minmax(0,1fr); padding:12px 16px; } header { padding:12px 16px; } .resumo { grid-template-columns:repeat(2,1fr); } }

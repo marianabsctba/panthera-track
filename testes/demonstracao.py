@@ -37,40 +37,48 @@ def pedir(cred, metodo, caminho, corpo=None):
 
 
 def semear(alfa, beta):
-    def abre(cliente, sufixo, titulo, descricao, criticidade):
+    def abre(cliente, sufixo, titulo, descricao, criticidade, **extras):
         return pedir(cliente["credenciais"]["siem"], "POST", "/api/v1/siem/chamados", {
-            "id_externo": f"exemplo-{sufixo}", "titulo": titulo, "descricao": descricao, "criticidade": criticidade, "solicitante": "SIEM"})["numero"]
+            "id_externo": f"exemplo-{sufixo}", "titulo": titulo, "descricao": descricao, "criticidade": criticidade, "solicitante": "SIEM", **extras})["numero"]
 
     def faz(cliente, numero, acao, **corpo):
         pedir(cliente["credenciais"]["atendente"], "POST", f"/api/v1/chamados/{numero}/{acao}", corpo or None)
 
-    n = abre(alfa, "consulta", "Dúvida sobre retenção de logs", "Cliente pergunta por quanto tempo os logs ficam guardados.", "consulta")
+    n = abre(alfa, "consulta", "Dúvida sobre retenção de logs", "Cliente pergunta por quanto tempo os logs ficam guardados.", "consulta",
+             tipo="requisicao", categoria="duvida")
     faz(alfa, n, "atender", atendente="Bia Santos")
     faz(alfa, n, "resolver", texto="Explicada a política de retenção ao cliente.")
     faz(alfa, n, "encerrar")
 
-    n = abre(alfa, "baixa", "Agente fora do ar em estação", "Estação parou de enviar eventos há duas horas.", "baixa")
+    n = abre(alfa, "baixa", "Agente fora do ar em estação", "Estação parou de enviar eventos há duas horas.", "baixa",
+             categoria="disponibilidade", contexto={"ativo": "ESTACAO-042"})
     faz(alfa, n, "atender", atendente="Bia Santos")
     faz(alfa, n, "resolver", texto="Serviço do agente reiniciado e coleta normalizada.")
 
-    n = abre(alfa, "media", "Conta de serviço com senha antiga", "Política de troca de senha vencida.", "media")
+    n = abre(alfa, "media", "Conta de serviço com senha antiga", "Política de troca de senha vencida.", "media",
+             categoria="acesso", contexto={"ativo": "SRV-APP-02", "usuario": "svc_backup", "regra": "Senha fora da política"})
     faz(alfa, n, "atender", atendente="Caio Lima")
     faz(alfa, n, "pausar", texto="Cliente precisa indicar a janela de troca.")
 
-    n = abre(alfa, "alta", "Varredura de portas vinda da rede interna", "Correlação apontou varredura a partir de uma estação.", "alta")
+    n = abre(alfa, "alta", "Varredura de portas vinda da rede interna", "Correlação apontou varredura a partir de uma estação.", "alta",
+             categoria="rede", contexto={"ativo": "ESTACAO-017", "ip_origem": "10.0.8.17", "regra": "Varredura de portas", "tecnica_mitre": "T1046"})
     faz(alfa, n, "atender", atendente="Caio Lima")
     faz(alfa, n, "andamento", texto="Estação isolada, análise em curso.")
 
-    abre(alfa, "critica", "Força bruta seguida de login em servidor", "Muitas falhas de login e um sucesso na mesma origem.", "critica")
-    abre(beta, "critica", "Malware detectado em servidor de arquivos", "Antivírus e correlação apontam o mesmo arquivo.", "critica")
-    abre(beta, "media", "Pico de alertas em firewall", "Volume acima do normal na última hora.", "media")
+    abre(alfa, "critica", "Força bruta seguida de login em servidor", "Muitas falhas de login e um sucesso na mesma origem.", "critica",
+         categoria="acesso", contexto={"ativo": "SRV-WEB-01", "ip_origem": "203.0.113.45", "ip_destino": "10.0.1.10", "usuario": "administrador",
+                                       "regra": "Múltiplas falhas seguidas de sucesso", "tecnica_mitre": "T1110.001", "url_alerta": "https://roar.exemplo.org/alertas/1042"})
+    abre(beta, "critica", "Malware detectado em servidor de arquivos", "Antivírus e correlação apontam o mesmo arquivo.", "critica",
+         categoria="malware", contexto={"ativo": "SRV-ARQ-03", "regra": "Arquivo malicioso conhecido", "tecnica_mitre": "T1204.002"})
+    abre(beta, "media", "Pico de alertas em firewall", "Volume acima do normal na última hora.", "media",
+         categoria="rede", contexto={"ativo": "FW-BORDA-01"})
 
 
 def principal():
     novo = not ARQUIVO.exists()
     if novo:
-        alfa = provisao.criar("Cliente Alfa", PRAZOS)
-        beta = provisao.criar("Cliente Beta", PRAZOS)
+        alfa = provisao.criar("Cliente Alfa", PRAZOS, sigla="ALFA")
+        beta = provisao.criar("Cliente Beta", PRAZOS, sigla="BETA")
         contas = {
             "analista": pessoas.criar("Ana Rocha", "ana@exemplo.org", "analista", ["Cliente Alfa", "Cliente Beta"]),
             "gestor": pessoas.criar("Gil Gestor", "gil@exemplo.org", "cliente", ["Cliente Alfa"], "gestor"),

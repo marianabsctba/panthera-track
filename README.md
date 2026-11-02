@@ -6,7 +6,7 @@ Este projeto não é afiliado ao GLPI nem à Teclib. GLPI é marca de seus titul
 
 ## Estado
 
-Prontos: abertura pelo SIEM, pelo portal e por telefone; fila única do analista; login com segundo fator; pessoas do cliente com autor real no histórico; SLA contado e status devolvido ao SIEM por webhook. O que vem depois está em [docs/arquitetura.md](docs/arquitetura.md).
+Prontos: abertura pelo SIEM, pelo portal e por telefone; fila única do analista; login com segundo fator; pessoas do cliente com autor real no histórico; código único, tipo, categoria, contexto do incidente, contato e anexos; prazos de primeira resposta e de resolução, com tempo por situação e motivo das pausas; status devolvido ao SIEM por webhook. O que vem depois está em [docs/arquitetura.md](docs/arquitetura.md).
 
 ## Documentos
 

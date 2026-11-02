@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -24,6 +24,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "fachada"))
 
 from track_api import provisao  # noqa: E402
+from track_api.dominio import calcular_sla  # noqa: E402
 
 API = "http://127.0.0.1:8710"
 PRAZOS = {"critica": 4, "alta": 8, "media": 24, "baixa": 48, "consulta": 72}
@@ -57,7 +58,7 @@ class Receptor(BaseHTTPRequestHandler):
             self.send_response(500)
             self.end_headers()
             return
-        Receptor.recebidos.append((self.headers["X-Track-Data"], self.headers["X-Track-Assinatura"], corpo))
+        Receptor.recebidos.append((self.headers["X-GLPI-timestamp"], self.headers["X-GLPI-signature"], corpo))
         self.send_response(200)
         self.end_headers()
 
@@ -69,14 +70,33 @@ def data(texto):
     return datetime.fromisoformat(texto)
 
 
+def conferir_contas_de_sla():
+    """Sem esperar horas de verdade: o cálculo com datas fixas, em cada faixa do prazo."""
+    def sla(minutos_passados, status=2, **extras):
+        inicio = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+        chamado = {"status": {"id": status}, "date": inicio.isoformat(), "resolution_date": (inicio + timedelta(hours=4)).isoformat(), **extras}
+        return calcular_sla(chamado, inicio + timedelta(minutes=minutos_passados), 15)
+
+    confere("SLA com folga não está em risco", sla(60)["em_risco"] is False and sla(60)["percentual"] == 25.0, sla(60))
+    confere("SLA com um quarto restante está em risco", sla(180)["em_risco"] is True and sla(180)["estourado"] is False, sla(180))
+    confere("SLA vencido está estourado e não em risco", sla(241)["estourado"] is True and sla(241)["em_risco"] is False, sla(241))
+    confere("resposta sem atendente estoura no prazo", sla(16)["resposta"]["estourada"] is True and sla(14)["resposta"]["estourada"] is False, sla(16))
+    p = sla(100, status=4, begin_waiting_date=datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc).isoformat())
+    confere("pausa em curso desconta dos corridos", p["segundos_corridos"] == 3600 and p["segundos_pausados"] == 2400 and p["pausado"] is True, p)
+    confere("pausa em curso empurra o prazo", p["segundos_restantes"] == 4 * 3600 - 3600, p)
+
+
 def principal():
-    receptor = HTTPServer(("127.0.0.1", 0), Receptor)
+    conferir_contas_de_sla()
+    receptor = HTTPServer(("0.0.0.0", 0), Receptor)
     threading.Thread(target=receptor.serve_forever, daemon=True).start()
-    url_receptor = f"http://127.0.0.1:{receptor.server_port}/webhook"
+    # O motor roda em contêiner: precisa do endereço da máquina, não do local.
+    ip_da_maquina = subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout.split()[0]
+    url_receptor = f"http://{ip_da_maquina}:{receptor.server_port}/webhook"
 
     sufixo = uuid.uuid4().hex[:6]
     print("provisionando duas instâncias...", flush=True)
-    a = provisao.criar(f"cliente-a-{sufixo}", PRAZOS, url_receptor)
+    a = provisao.criar(f"cliente-a-{sufixo}", PRAZOS, url_receptor, webhook_interno=True)
     b = None
     srv = None
     try:
@@ -93,7 +113,9 @@ def principal():
         siem, atend = a["credenciais"]["siem"], a["credenciais"]["atendente"]
         siem_b = b["credenciais"]["siem"]
         novo = {"id_externo": f"incidente-{sufixo}", "titulo": "Força bruta em servidor", "descricao": "Alerta <b>123</b> virou incidente",
-                "criticidade": "critica", "solicitante": "SIEM"}
+                "criticidade": "critica", "solicitante": "SIEM", "categoria": "acesso",
+                "contexto": {"ativo": "SRV-01", "ip_origem": "203.0.113.45", "usuario": "root", "regra": "Força bruta", "tecnica_mitre": "T1110.001",
+                             "url_alerta": "https://roar.exemplo.org/alertas/1"}}
 
         # Autenticação
         c = "/api/v1/siem/chamados"
@@ -110,6 +132,15 @@ def principal():
         n = ch["numero"]
         confere("nasce aberto", ch["status"] == "aberto")
         confere("registra solicitante e criticidade", ch["solicitante"] == "SIEM" and ch["criticidade"] == "critica")
+        confere("código traz a sigla do cliente", ch["codigo"] == f"{a['sigla']}-{n:04d}", ch["codigo"])
+        confere("guarda tipo, categoria e contexto", ch["tipo"] == "incidente" and ch["categoria"] == "Acesso"
+                and ch["contexto"]["ip_origem"] == "203.0.113.45" and ch["contexto"]["tecnica_mitre"] == "T1110.001", ch)
+        confere("primeira resposta tem prazo próprio", data(ch["sla"]["resposta"]["prazo"]) - data(ch["aberto_em"]) == timedelta(minutes=15), ch["sla"])
+        confere("primeira resposta ainda pendente", ch["sla"]["resposta"]["em"] is None and ch["sla"]["resposta"]["cumprida"] is None, ch["sla"])
+        confere("não leva dado de contato ao SIEM", "contato" not in ch, ch)
+        for ruim, nome in (({"url_alerta": "javascript:alert(1)"}, "link que não é web"), ({"ip_origem": "nao-e-ip"}, "IP inválido"),
+                           ({"tecnica_mitre": "x"}, "técnica inválida"), ({"cpf": "123"}, "campo desconhecido no contexto")):
+            confere(f"{nome} recusado", pedir(siem, "POST", c, {**novo, "id_externo": f"ruim-{sufixo}", "contexto": ruim}).status_code == 422)
         confere("prazo é abertura + 4 horas corridas", data(ch["sla"]["prazo"]) - data(ch["aberto_em"]) == timedelta(hours=4), ch["sla"])
         confere("descrição é escapada", "<b>" not in ch["descricao"], ch["descricao"])
         r2 = pedir(siem, "POST", c, novo)
@@ -125,6 +156,7 @@ def principal():
         r = pedir(atend, "POST", p + "/atender", {"atendente": "Ana Analista"})
         confere("atende", r.status_code == 200 and r.json()["status"] == "em_andamento", r.text)
         confere("registra atendente", r.json().get("atendente") == "Ana Analista")
+        confere("primeira resposta cumprida ao atender", r.json()["sla"]["resposta"]["cumprida"] is True, r.json()["sla"])
         r = pedir(atend, "POST", p + "/andamento", {"texto": "Bloqueado o IP de origem"})
         confere("registra andamento", r.status_code == 200, r.text)
         prazo_antes = data(r.json()["sla"]["prazo"])
@@ -173,17 +205,21 @@ def principal():
         confere("histórico tem andamento e solução", "Bloqueado o IP" in conteudos and "senha trocada" in conteudos, conteudos)
         confere("resposta não revela a ferramenta", "glpi" not in (r.text + json.dumps(final)).lower())
 
-        # Status de volta ao SIEM
-        limite = time.time() + 45
-        while time.time() < limite and len(Receptor.recebidos) < len(esperado):
-            time.sleep(1)
-        corpos = [json.loads(x[2]) for x in Receptor.recebidos]
-        confere("webhook entrega tudo mesmo com falha na primeira tentativa", [x["tipo"] for x in corpos] == esperado, [x["tipo"] for x in corpos])
-        confere("webhook em sequência", [x["sequencia"] for x in corpos] == list(range(1, len(esperado) + 1)))
+        # Status de volta ao SIEM, pelo webhook nativo: a fila do motor roda a cada minuto.
+        limite = time.time() + 300
+        corpos = []
+        while time.time() < limite:
+            corpos = [json.loads(x[2]) for x in Receptor.recebidos]
+            if any(x["status"] == 6 for x in corpos):
+                break
+            time.sleep(3)
+        confere("webhook nativo leva o encerramento, mesmo com falha na primeira tentativa", any(x["status"] == 6 for x in corpos), corpos)
+        confere("webhook leva o status do meio do caminho", any(x["status"] == 4 for x in corpos), corpos)
+        confere("webhook identifica o chamado", all(x["numero"] == n and x["id_externo"] == novo["id_externo"] for x in corpos), corpos)
         carimbo, assinatura, bruto = Receptor.recebidos[0]
-        calc = hmac.new(a["webhook_segredo"].encode(), f"{carimbo}.".encode() + bruto, hashlib.sha256).hexdigest()
-        confere("webhook assinado", hmac.compare_digest(calc, assinatura))
-        confere("webhook leva o número e o SLA", corpos[-1]["chamado"]["numero"] == n and corpos[-1]["chamado"]["status"] == "encerrado")
+        calc = hmac.new(a["webhook_segredo"].encode(), bruto + carimbo.encode(), hashlib.sha256).hexdigest()
+        confere("webhook assinado", hmac.compare_digest(calc, assinatura), assinatura)
+        confere("webhook não leva o conteúdo do chamado", b"Bloqueado" not in bruto and b"titulo" not in bruto, bruto)
 
         # As cinco criticidades
         for crit, horas in PRAZOS.items():

@@ -14,6 +14,7 @@ services:
       GLPI_DB_PASSWORD: ${SENHA_BANCO:?}
     volumes:
       - glpi_dados:/var/glpi
+      - ./local_define.php:/var/www/glpi/config/local_define.php:ro
     ports:
       - "127.0.0.1:${PORTA_GLPI:?}:80"
 

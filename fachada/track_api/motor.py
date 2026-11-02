@@ -1,4 +1,5 @@
 """Conversa com a instância de GLPI de um cliente. Nada daqui chega cru à resposta da API."""
+import json
 import threading
 import time
 
@@ -16,8 +17,10 @@ class MotorIndisponivel(Exception):
 
 class Motor:
     def __init__(self, url, oauth_id, oauth_segredo, usuario, senha, perfil=None):
-        self._base = url.rstrip("/") + "/api.php"
+        self._url = url.rstrip("/")
+        self._base = self._url + "/api.php"
         self._perfil = perfil
+        self._usuario, self._senha = usuario, senha
         self._credenciais = {
             "grant_type": "password", "client_id": oauth_id, "client_secret": oauth_segredo,
             "username": usuario, "password": senha, "scope": "api",
@@ -38,7 +41,7 @@ class Motor:
                 self._expira = time.time() + int(dados.get("expires_in", 3600)) - 60
             return self._token
 
-    def pedir(self, metodo, caminho, **k):
+    def _requisitar(self, metodo, caminho, **k):
         cabecalhos = {"Authorization": "Bearer " + self._obter_token(), "GLPI-Entity": "0"}
         if self._perfil:
             # Sem isto, a sessão usa o perfil padrão do usuário novo, de autoatendimento.
@@ -52,6 +55,10 @@ class Motor:
             raise MotorIndisponivel(str(e)) from e
         if r.status_code >= 300:
             raise MotorIndisponivel(f"{metodo} {caminho}: {r.status_code} {r.text[:300]}")
+        return r
+
+    def pedir(self, metodo, caminho, **k):
+        r = self._requisitar(metodo, caminho, **k)
         return r.json() if r.content else None
 
     def criar_chamado(self, **campos):
@@ -73,6 +80,9 @@ class Motor:
     def mudar_status(self, numero, status):
         self.pedir("PATCH", f"/Assistance/Ticket/{numero}", json={"status": status})
 
+    def classificar(self, numero, tipo, categoria):
+        self.pedir("PATCH", f"/Assistance/Ticket/{numero}", json={"type": tipo, "category": categoria})
+
     def acompanhamento(self, numero, texto):
         self.pedir("POST", f"/Assistance/Ticket/{numero}/Timeline/Followup", json={"content": texto})
 
@@ -81,6 +91,37 @@ class Motor:
 
     def linha_do_tempo(self, numero):
         return self.pedir("GET", f"/Assistance/Ticket/{numero}/Timeline")
+
+    def anexar(self, numero, nome, conteudo):
+        """A API nova ignora o arquivo enviado, então só o envio passa pela antiga, numa sessão curta."""
+        api = self._url + "/apirest.php"
+        try:
+            sessao = self._http.get(api + "/initSession", auth=(self._usuario, self._senha))
+            if sessao.status_code != 200:
+                raise MotorIndisponivel(f"sessão de anexo: {sessao.status_code}")
+            cabecalhos = {"Session-Token": sessao.json()["session_token"]}
+            try:
+                if self._perfil:
+                    self._http.post(api + "/changeActiveProfile", headers=cabecalhos, json={"profiles_id": int(self._perfil)})
+                manifesto = {"input": {"name": nome, "_filename": [nome], "itemtype": "Ticket", "items_id": numero}}
+                r = self._http.post(api + "/Document", headers=cabecalhos, data={"uploadManifest": json.dumps(manifesto)},
+                                    files={"filename[0]": (nome, conteudo, "application/octet-stream")})
+            finally:
+                self._http.get(api + "/killSession", headers=cabecalhos)
+        except httpx.HTTPError as e:
+            raise MotorIndisponivel(str(e)) from e
+        if r.status_code >= 300:
+            raise MotorIndisponivel(f"anexo: {r.status_code} {r.text[:300]}")
+        return r.json()["id"]
+
+    def documentos(self, numero):
+        return self.pedir("GET", f"/Assistance/Ticket/{numero}/Timeline/Document")
+
+    def documento(self, documento_id):
+        return self.pedir("GET", f"/Management/Document/{documento_id}")
+
+    def baixar_documento(self, documento_id):
+        return self._requisitar("GET", f"/Management/Document/{documento_id}/Download").content
 
 
 _motores = {}

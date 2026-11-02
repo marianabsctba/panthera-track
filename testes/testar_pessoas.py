@@ -3,6 +3,7 @@
 sudo sh testes/preparar.sh
 sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/testar_pessoas.py'
 """
+import hashlib
 import os
 import re
 import subprocess
@@ -174,6 +175,9 @@ def principal():
         confere("analista vê os dois clientes na mesma fila", {x["cliente"] for x in d["chamados"]} == {nome_a, nome_b}, d["clientes"])
         confere("fila põe na frente o mais perto de estourar", d["chamados"][0]["cliente"] == nome_b and d["chamados"][0]["criticidade"] == "critica", d["chamados"][0])
         confere("mesmo número em clientes distintos não se confunde", len({(x["cliente_id"], x["numero"]) for x in d["chamados"]}) == 16)
+        confere("código nunca repete na fila", len({x["codigo"] for x in d["chamados"]}) == 16, [x["codigo"] for x in d["chamados"]])
+        confere("clientes têm siglas diferentes", a["sigla"] != b["sigla"], (a["sigla"], b["sigla"]))
+        confere("fila não leva dado de contato", all("contato" not in x for x in d["chamados"]))
 
         cc, _s, _c = entrar_pela_primeira_vez(caio)
         f = cc.get("/api/v1/tela/chamados").json()
@@ -183,13 +187,60 @@ def principal():
 
         # Ciclo com autor real
         confere("não encerra sem resolução", c.post(p0 + "/encerrar").status_code == 409)
+
+        # Detalhes
+        r = s1.post("/api/v1/tela/chamados", json={"titulo": "Com detalhes", "descricao": "x", "criticidade": "baixa", "tipo": "requisicao", "categoria": "acesso",
+                                                   "ativo": "NOTE-12", "contato_telefone": "+55 41 99999-0000"})
+        det = r.json()
+        confere("portal guarda tipo, categoria e ativo", r.status_code == 201 and det["tipo"] == "requisicao" and det["categoria"] == "Acesso" and det["contexto"]["ativo"] == "NOTE-12", r.text)
+        pd = f"/api/v1/tela/clientes/{cid_a}/chamados/{det['numero']}"
+        v = s1.get(pd).json()
+        confere("contato vem do formulário e da conta", v["contato"]["telefone"] == "+55 41 99999-0000" and v["contato"]["email"] == do_cliente[1]["email"], v.get("contato"))
+        confere("telefone inválido recusado", s1.post("/api/v1/tela/chamados", json={"titulo": "x", "descricao": "x", "criticidade": "baixa", "contato_telefone": "<b>"}).status_code == 422)
+        confere("cliente não reclassifica", s1.post(pd + "/classificar", json={"tipo": "incidente", "categoria": "rede"}).status_code == 403)
+        r = c.post(pd + "/classificar", json={"tipo": "incidente", "categoria": "rede"})
+        confere("analista reclassifica", r.status_code == 200 and r.json()["categoria"] == "Rede" and r.json()["tipo"] == "incidente", r.text)
+        confere("reclassificar fica no histórico", any(e["tipo"] == "classificado" and e["detalhe"] == "Incidente, Rede" for e in c.get(pd + "/historico").json()["eventos"]))
+        confere("analista vê a resposta pendente", c.get(pd).json()["sla"]["resposta"]["em"] is None)
+
+        conteudo = b"evidencia de teste\n" * 100
+        r = s1.post(pd + "/anexos", files={"arquivo": ("../../prova final.txt", conteudo, "text/plain")})
+        confere("anexa arquivo e limpa o caminho do nome", r.status_code == 201 and r.json()["nome"] == "prova final.txt", r.text)
+        confere("anexo registra o hash", r.json().get("sha256") == hashlib.sha256(conteudo).hexdigest())
+        confere("extensão perigosa recusada", s1.post(pd + "/anexos", files={"arquivo": ("x.html", b"<script>", "text/html")}).status_code == 415)
+        confere("arquivo sem extensão recusado", s1.post(pd + "/anexos", files={"arquivo": ("x", b"a")}).status_code == 415)
+        confere("arquivo vazio recusado", s1.post(pd + "/anexos", files={"arquivo": ("x.txt", b"")}).status_code == 422)
+        confere("arquivo acima de 10 MB recusado", s1.post(pd + "/anexos", files={"arquivo": ("g.txt", b"x" * (10 * 1024 * 1024 + 1))}).status_code == 413)
+        anexos = c.get(pd).json()["anexos"]
+        confere("analista vê o anexo com o autor real", len(anexos) == 1 and anexos[0]["autor"] == "Pessoa 1" and anexos[0]["nome"] == "prova final.txt", anexos)
+        confere("motor calculou o próprio hash", anexos[0]["sha1"] == hashlib.sha1(conteudo).hexdigest(), anexos)
+        confere("captura de rede é aceita", s1.post(pd + "/anexos", files={"arquivo": ("captura.pcap", b"\xd4\xc3\xb2\xa1")}).status_code == 201)
+        confere("log é aceito", s1.post(pd + "/anexos", files={"arquivo": ("servidor.log", b"linha")}).status_code == 201)
+        pa = f"{pd}/anexos/{anexos[0]['id']}"
+        r = c.get(pa)
+        confere("baixa o conteúdo igual", r.content == conteudo)
+        confere("download nunca abre na tela", r.headers["content-type"] == "application/octet-stream" and r.headers["content-disposition"].startswith("attachment"), r.headers)
+        confere("outra pessoa não baixa", s0.get(pa).status_code == 404)
+        confere("outra pessoa não anexa", s0.post(pd + "/anexos", files={"arquivo": ("a.txt", b"a")}).status_code == 404)
+        confere("outro cliente não baixa", cb.get(pa).status_code == 404)
+        confere("anexo de outro chamado não vale nesta rota", c.get(f"{p0}/anexos/{anexos[0]['id']}").status_code == 404)
+        confere("anexo fica no histórico", any(e["tipo"] == "anexo" and e["detalhe"] == "prova final.txt, SHA-256 " + hashlib.sha256(conteudo).hexdigest() for e in c.get(pd + "/historico").json()["eventos"]))
+
         r = c.post(p0 + "/assumir")
         confere("analista assume em nome próprio", r.status_code == 200 and r.json()["atendente"] == "Ana Rocha", r.text)
         confere("analista registra andamento", c.post(p0 + "/andamento", json={"texto": "Analisando o pedido"}).status_code == 200)
+        confere("primeira resposta cumprida ao assumir", c.get(p0).json()["sla"]["resposta"]["cumprida"] is True)
         confere("analista pausa", c.post(p0 + "/pausar", json={"texto": "Falta um dado"}).json().get("status") == "aguardando_cliente")
+        v = c.get(p0).json()
+        confere("mostra o motivo da pausa em curso", v["pausas"] and v["pausas"][-1]["motivo"] == "Falta um dado" and v["pausas"][-1]["em_curso"] is True and v["pausas"][-1]["autor"] == "Ana Rocha", v["pausas"])
+        confere("mostra o percentual do prazo", v["sla"]["percentual"] is not None, v["sla"])
+        time.sleep(2)
         r = s0.post(p0 + "/comentar", json={"texto": "Segue o dado <script>x</script>"})
         confere("cliente comenta na pausa", r.status_code == 200, r.text)
         confere("analista retoma", c.post(p0 + "/retomar").json().get("status") == "em_andamento")
+        v = c.get(p0).json()
+        confere("tempo por situação conta a pausa", v["tempos"]["aguardando_cliente"] >= 2, v["tempos"])
+        confere("pausa encerrada fica com a duração", v["pausas"][-1]["em_curso"] is False and v["pausas"][-1]["segundos"] >= 2, v["pausas"])
         confere("analista resolve", c.post(p0 + "/resolver", json={"texto": "Pedido atendido"}).json().get("status") == "resolvido")
         confere("cliente não comenta em resolvido", s0.post(p0 + "/comentar", json={"texto": "x"}).status_code == 409)
         r = c.post(p0 + "/encerrar")
