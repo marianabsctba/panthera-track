@@ -13,8 +13,11 @@ Usar o que o GLPI já faz e customizar só o que ele não tem.
 | Autor real das ações | GLPI (com um usuário-sombra por pessoa) |
 | Status de volta ao SIEM, com assinatura e retentativa | GLPI (webhook nativo) |
 | Escalonamento automático por prazo e grupos N2 e N3 | GLPI (níveis de SLA e grupos) |
+| Abertura e resposta por e-mail, recusa de remetente desconhecido | GLPI (coletor e regras) |
+| Avisos por e-mail a cada movimentação | GLPI (notificações), com modelo próprio para não revelar a ferramenta |
 | Tela, login com segundo fator e fila única entre instâncias | Nosso: o GLPI enxerga uma instância só e a tela não pode revelar a ferramenta |
 | Contexto do SIEM e contato de quem pediu | Nosso: o GLPI não guarda isso por chamado |
+| Trazer para a fila os chamados que nascem por e-mail | Nosso: a fila é da fachada, e o e-mail entra direto no motor |
 | Eventos com autor e motivo, e SHA-256 dos anexos | Nosso: a API do GLPI não expõe o log de alterações |
 | Primeira resposta | Nosso: a API não informa o prazo, e o motor marca a tomada de conhecimento até em escalonamento automático |
 
@@ -37,7 +40,8 @@ Antes de construir qualquer coisa, a pergunta é se o GLPI já faz.
 13. **Anexos ficam no motor.** A API nova ignora o arquivo enviado, então só o envio usa a API antiga, numa sessão curta, liberada apenas para a rede interna do Docker. A fachada confere extensão e tamanho, entrega sempre como download, confere se o documento é daquele chamado e grava o SHA-256 no histórico.
 14. **O status volta ao SIEM pelo webhook nativo**, que também pega mudanças feitas fora da fachada. Por isso o contrato é um aviso curto seguido de consulta, sem ordem garantida.
 15. **Escalonar muda quem atende, nunca a criticidade nem o prazo.** N1 é o atendimento normal, sem grupo, porque atribuir grupo na abertura tiraria o chamado de Aberto. Vencido o prazo, o motor manda para N2; passada mais metade do prazo, para N3. O analista também escala à mão, com motivo, sempre para cima. O nível é o grupo mais alto da equipe do chamado.
-16. **Telefone e e-mail de contato não saem do chamado.** Não vão ao SIEM, à fila nem aos eventos, que são imutáveis: assim dá para apagar o contato depois sem mexer no histórico. O contexto do SIEM recusa campo desconhecido.
+16. **E-mail entra direto no motor, cada cliente com a própria caixa.** A caixa identifica o cliente, e só quem tem conta é aceito. A fachada adota esses chamados a cada 15 segundos, sem contexto nem tipo informado. Quem abre vira requerente e os gestores do cliente, observadores, e é assim que o motor sabe quem avisar.
+17. **Telefone e e-mail de contato não saem do chamado.** Não vão ao SIEM, à fila nem aos eventos, que são imutáveis: assim dá para apagar o contato depois sem mexer no histórico. O contexto do SIEM recusa campo desconhecido.
 
 ## Componentes
 
@@ -64,6 +68,11 @@ Testado na versão 12.0.1:
 - O webhook nativo recusa destino em rede privada. A liberação é por contexto, num arquivo em `/var/www/glpi/config`, e não na pasta de dados.
 - A assinatura do webhook é HMAC-SHA256 de corpo + hora, nos cabeçalhos `X-GLPI-signature` e `X-GLPI-timestamp`.
 - Categoria e SLA de resposta valem também para o perfil de autoatendimento.
+- O aviso de atualização vem desligado de fábrica. Coleta e envio também vêm em modo interno.
+- O modelo de fábrica leva o endereço interno e o nome da ferramenta. Ele é trocado na provisão, por código, porque a rota de tradução da API falha.
+- A resposta por e-mail vira acompanhamento com o autor real, reconhecida pela etiqueta do assunto, que é a sigla do cliente.
+- A API não aceita requerente na criação do chamado, e o perfil de autoatendimento não pode adicioná-lo depois. Quem liga é a conta da fachada; para o primeiro aviso chegar, o aviso de novo chamado inclui quem escreveu.
+- Resposta do cliente numa pausa tira o chamado de Pendente e retoma o SLA, pela tela ou por e-mail. Sem atendente atribuído no motor, ele voltaria para Novo; por isso assumir atribui o usuário-sombra do analista.
 - Atribuir grupo passa o chamado para Em andamento e marca a tomada de conhecimento, mesmo sem ninguém assumir. Por isso, assumir vale nos dois status, se ainda não houver atendente, e a primeira resposta é contada na fachada, quando uma pessoa assume.
 - O técnico não pode atribuir grupo; o supervisor pode. A fachada e os analistas usam o perfil de supervisor.
 - A API cria o nível de SLA, mas não as ações dele, então isso roda como código dentro do motor.
@@ -113,8 +122,8 @@ Testado na versão 12.0.1:
 | Primeira resposta, barra dos prazos, durações do motor e motivo de cada pausa | Pronto |
 | Contato de quem pediu e anexos | Pronto |
 | Escalonamento manual e automático, com N2 e N3 | Pronto; o aviso por e-mail em 75% do prazo vem com a fatia de avisos, e a fila já marca Em risco |
-| Abertura por e-mail | Falta |
-| Aviso eletrônico a cada movimentação | Falta |
+| Abertura e resposta por e-mail | Pronto |
+| Aviso por e-mail a cada movimentação | Pronto, para solicitante com conta, gestores e equipe |
 | Busca por período, chamado, criticidade, situação e solicitante | Falta |
 | Exportação do histórico em JSON e relatório mensal | Falta |
 
@@ -131,6 +140,9 @@ O GLPI é GPL-3.0. Código que roda dentro dele, como o plugin, herda a GPL. A f
 - O bloqueio por tentativas é por conta: alguém pode travar uma conta de propósito errando a senha, por 15 minutos.
 - A fila lista até 200 chamados por cliente, até existir a busca.
 - O escalonamento automático aparece no nível do chamado, mas não gera evento, porque acontece dentro do motor. Entra quando o histórico completo for resolvido.
+- Quem pede por telefone sem ter conta não recebe aviso: o motor só avisa usuários. Os gestores do cliente e a equipe recebem. O mesmo vale para o que vem do SIEM.
+- O assunto do aviso traz `[ALFA #0000004]`, com mais zeros que o código da tela, `ALFA-0004`. Os cabeçalhos técnicos do e-mail ainda podem citar a ferramenta; o assunto e o corpo não citam.
+- Mudança de status feita fora da fachada aparece na situação do chamado, mas não gera evento. Entra com o histórico completo.
 - Sem antivírus nos anexos por enquanto: o download nunca abre na tela, mas quem baixa precisa de cuidado.
 - A API antiga fica ligada só para o envio de anexos, restrita à rede interna do Docker. Se a API nova passar a receber arquivo, ela sai.
 - O motivo de pausa ainda é texto livre. O motor tem motivos de pendência nativos, com lembrete e resolução automáticos, que podem entrar quando o processo de atendimento for definido.

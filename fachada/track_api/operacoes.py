@@ -1,16 +1,37 @@
 """Regras do chamado, comuns à API assinada e à tela."""
 import json
+import logging
 from html import escape
 
 from fastapi import HTTPException
 
 from . import banco
 from .dominio import CRITICIDADES, STATUS, TIPOS, pausas_dos_eventos, representar
-from .motor import motor_do_cliente
+from .motor import MotorIndisponivel, motor_do_cliente
+
+log = logging.getLogger("track.operacoes")
 
 
 def html(texto):
     return "<p>" + escape(texto) + "</p>"
+
+
+def _ligar_pessoas(cliente, numero, pessoa_id):
+    """Quem abriu vira requerente e os gestores do cliente, observadores: é assim que o motor sabe quem avisar.
+
+    O chamado já existe. Falhar aqui atrapalha só os avisos, então não desfaz a abertura.
+    """
+    with banco.transacao() as conn:
+        ligacoes = conn.execute(
+            """SELECT s.motor_id, p.id = %s AS requerente FROM sombras s JOIN pessoas p ON p.id = s.pessoa_id
+               WHERE s.cliente_id = %s AND s.motor_id IS NOT NULL AND p.ativo AND (p.id = %s OR p.papel = 'gestor')""",
+            (pessoa_id, cliente["id"], pessoa_id)).fetchall()
+    motor = motor_do_cliente(cliente)
+    for ligacao in ligacoes:
+        try:
+            motor.ligar_pessoa(numero, ligacao["motor_id"], "requester" if ligacao["requerente"] else "observer")
+        except MotorIndisponivel as e:
+            log.warning("chamado %s sem pessoa ligada: %s", numero, e)
 
 
 def registrar(conn, cliente_id, numero, tipo, autor, dados, pessoa_id=None, detalhe=None):
@@ -51,6 +72,7 @@ def abrir(cliente, titulo, descricao, criticidade, solicitante, origem, escritor
              (cliente.get("prazos_resposta") or {}).get(criticidade))).fetchone()
         saida = representar(linha, leitor.chamado(numero))
         registrar(conn, cliente["id"], numero, "aberto", solicitante, saida, pessoa_id)
+    _ligar_pessoas(cliente, numero, pessoa_id)
     return saida, True
 
 
@@ -109,8 +131,8 @@ def historico(cliente, numero):
     }
 
 
-def pausas(cliente, numero):
-    return pausas_dos_eventos(_eventos(cliente, numero))
+def pausas(cliente, numero, ainda_pausado):
+    return pausas_dos_eventos(_eventos(cliente, numero), ainda_pausado)
 
 
 def anexos(cliente, numero):

@@ -21,7 +21,10 @@ Requer Linux com Docker e Python 3.12, rodando como root ou com `sudo`. O teste 
 sudo sh testes/preparar.sh
 sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/testar_fatia.py'
 sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/testar_pessoas.py'
+sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python testes/testar_correio.py'
 ```
+
+O teste de e-mail sobe uma caixa de testes própria (GreenMail) e a remove no fim.
 
 ## Ver a tela
 
@@ -40,6 +43,16 @@ As credenciais vão só para o arquivo indicado, com permissão 600.
 ```bash
 cd fachada
 sudo sh -c 'set -a; . /opt/panthera-track/.env; set +a; /opt/panthera-track/venv/bin/python -m track_api.provisao criar --nome acme --prazos "{\"critica\":4,\"alta\":8,\"media\":24,\"baixa\":48,\"consulta\":72}" --saida /root/acme.json'
+```
+
+Para ligar e-mail e avisos, passe `--correio arquivo.json`, com permissão 600:
+
+```json
+{
+  "smtp_host": "smtp.exemplo.org", "smtp_port": 587, "smtp_usuario": "suporte@exemplo.org", "smtp_senha": "...", "smtp_tls": true,
+  "imap_caixa": "{imap.exemplo.org:993/imap/ssl}INBOX", "imap_usuario": "suporte@exemplo.org", "imap_senha": "...",
+  "remetente": "suporte@exemplo.org", "equipe": "soc@exemplo.org", "tela": "https://chamados.exemplo.org"
+}
 ```
 
 ## Criar uma pessoa

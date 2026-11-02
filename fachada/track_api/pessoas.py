@@ -15,18 +15,19 @@ from psycopg.rows import dict_row
 
 from .banco import cifrar
 from .motor import PERFIL_CLIENTE, PERFIL_FACHADA
-from .provisao import CLIENTES, _console
+from .provisao import CLIENTES, _console, _rodar_php
 from .sessao import hasher
 
 
-def _criar_sombra(conn, pessoa_id, cliente, perfil):
+def _criar_sombra(conn, pessoa_id, cliente, perfil, nome, email):
     identificador = cliente["identificador"]
     pasta, projeto = CLIENTES / identificador, f"track-{identificador}"
     usuario, senha = f"p{secrets.token_hex(8)}", secrets.token_hex(24)
     _console(pasta, projeto, "user:create", usuario, "-p", senha)
     _console(pasta, projeto, "user:grant", usuario, "-p", perfil, "-e", "0", "-r")
-    conn.execute("INSERT INTO sombras (pessoa_id, cliente_id, motor_usuario, motor_senha) VALUES (%s, %s, %s, %s)",
-                 (pessoa_id, cliente["id"], usuario, cifrar(senha)))
+    saida = _rodar_php(pasta, projeto, "definir_contato.php", {"usuario": usuario, "nome": nome, "email": email})
+    conn.execute("INSERT INTO sombras (pessoa_id, cliente_id, motor_usuario, motor_senha, motor_id) VALUES (%s, %s, %s, %s, %s)",
+                 (pessoa_id, cliente["id"], usuario, cifrar(senha), json.loads(saida.strip().splitlines()[-1])["id"]))
 
 
 def criar(nome, email, tipo, clientes, papel=None):
@@ -46,7 +47,7 @@ def criar(nome, email, tipo, clientes, papel=None):
         for cliente in linhas:
             if tipo == "analista":
                 conn.execute("INSERT INTO vinculos (pessoa_id, cliente_id) VALUES (%s, %s)", (pessoa_id, cliente["id"]))
-            _criar_sombra(conn, pessoa_id, cliente, PERFIL_FACHADA if tipo == "analista" else PERFIL_CLIENTE)
+            _criar_sombra(conn, pessoa_id, cliente, PERFIL_FACHADA if tipo == "analista" else PERFIL_CLIENTE, nome, email.strip().lower())
     return {"pessoa_id": str(pessoa_id), "email": email.strip().lower(), "senha_provisoria": senha}
 
 

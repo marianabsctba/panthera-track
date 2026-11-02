@@ -33,7 +33,10 @@ class Motor:
     def _obter_token(self, renovar=False):
         with self._trava:
             if renovar or not self._token or time.time() >= self._expira:
-                r = self._http.post(self._base + "/token", data=self._credenciais)
+                try:
+                    r = self._http.post(self._base + "/token", data=self._credenciais)
+                except httpx.HTTPError as e:
+                    raise MotorIndisponivel(str(e)) from e
                 if r.status_code != 200:
                     raise MotorIndisponivel(f"token: {r.status_code}")
                 dados = r.json()
@@ -82,6 +85,12 @@ class Motor:
 
     def classificar(self, numero, tipo, categoria):
         self.pedir("PATCH", f"/Assistance/Ticket/{numero}", json={"type": tipo, "category": categoria})
+
+    def recentes(self, limite=100):
+        return self.pedir("GET", "/Assistance/Ticket", params={"sort": "id:desc", "limit": limite})
+
+    def ligar_pessoa(self, numero, motor_id, papel):
+        self.pedir("POST", f"/Assistance/Ticket/{numero}/TeamMember", json={"type": "User", "id": motor_id, "role": papel})
 
     def atribuir_grupo(self, numero, grupo):
         self.pedir("POST", f"/Assistance/Ticket/{numero}/TeamMember", json={"type": "Group", "id": grupo, "role": "assigned"})

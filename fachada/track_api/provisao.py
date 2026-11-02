@@ -31,6 +31,8 @@ PRAZOS_RESPOSTA_PADRAO = {"critica": 15, "alta": 30, "media": 60, "baixa": 240, 
 # O que uma equipe de segurança anexa e a instalação padrão não aceita.
 _EXTENSOES_EXTRAS = {"log": "text/plain", "json": "application/json", "eml": "message/rfc822", "pcap": "application/vnd.tcpdump.pcap"}
 _TENTATIVAS_WEBHOOK = 5
+_DESTINO_USUARIO = 1  # Notification::USER_TYPE
+_QUEM_ESCREVEU = 7  # Notification::RECIPIENT
 _CARGA_WEBHOOK = '{"numero":{{ item.id }},"id_externo":"{{ item.external_id }}","status":{{ item.status.id }},"atualizado_em":"{{ item.date_mod }}"}'
 
 
@@ -52,7 +54,8 @@ def _console(pasta, projeto, *args):
 def _subir(pasta, projeto, porta):
     _compose(pasta, projeto, "up", "-d")
     url = f"http://127.0.0.1:{porta}"
-    for _ in range(90):
+    # A primeira subida instala o banco inteiro e pode levar minutos numa máquina ocupada.
+    for _ in range(300):
         try:
             if httpx.get(url, timeout=5).status_code in (200, 302):
                 return url
@@ -73,15 +76,39 @@ def _sigla_livre(nome):
     return next(f"{base}{n}" for n in range(2, 100) if f"{base}{n}" not in usadas)
 
 
+def _rodar_php(pasta, projeto, arquivo, dados):
+    return _compose(pasta, projeto, "exec", "-T", "glpi", "php", "--", json.dumps(dados),
+                    input=(RAIZ / "infra/glpi" / arquivo).read_text()).stdout
+
+
+def _configurar_correio(pasta, projeto, admin, correio, sigla):
+    """E-mail é do motor: coletor, regras, avisos e resposta. Aqui só se liga e se ajusta o que ele traz de fábrica."""
+    _rodar_php(pasta, projeto, "configurar_correio.php", correio)
+    remetente = correio["remetente"]
+    admin.pedir("PATCH", "/Administration/Entity/0", json={
+        "admin_email": remetente, "admin_email_name": "Atendimento", "from_email": remetente, "from_email_name": "Atendimento",
+        "replyto_email": remetente, "notification_subject_tag": sigla, "mailing_signature": "Atendimento"})
+    admin.pedir("POST", "/Setup/EmailCollector", json={
+        "name": remetente, "host": correio["imap_caixa"], "login": correio["imap_usuario"], "password": correio["imap_senha"],
+        "is_active": True, "collect_only_unread": True, "use_mail_date": False, "create_user_from_email": False})
+    # A pessoa só vira requerente depois de criado o chamado: sem isto, o primeiro aviso não chegaria a quem abriu.
+    for notificacao in admin.pedir("GET", "/Notifications/Notification", params={"limit": 200, "filter": "itemtype==Ticket"}):
+        if notificacao["event"] == "update":
+            admin.pedir("PATCH", f"/Notifications/Notification/{notificacao['id']}", json={"is_active": True})
+        elif notificacao["event"] == "requester_user":
+            admin.pedir("PATCH", f"/Notifications/Notification/{notificacao['id']}", json={"is_active": False})
+        elif notificacao["event"] == "new":
+            admin.pedir("POST", f"/Notifications/Notification/{notificacao['id']}/Recipient", json={"type": _DESTINO_USUARIO, "items_id": _QUEM_ESCREVEU})
+
+
 def criar_niveis_de_sla(pasta, projeto, sla, grupos, segundos_do_prazo):
     """Vencido o prazo, vai para N2; passada mais metade dele, para N3. Só muda o grupo, nunca a criticidade."""
     niveis = [{"nome": "N2 no vencimento", "segundos": 0, "grupo": grupos["N2"]},
               {"nome": "N3 depois do vencimento", "segundos": segundos_do_prazo // 2, "grupo": grupos["N3"]}]
-    _compose(pasta, projeto, "exec", "-T", "glpi", "php", "--", json.dumps({"sla": sla, "niveis": niveis}),
-             input=(RAIZ / "infra/glpi/criar_niveis_sla.php").read_text())
+    _rodar_php(pasta, projeto, "criar_niveis_sla.php", {"sla": sla, "niveis": niveis})
 
 
-def criar(nome, prazos, webhook_url=None, prazos_resposta=None, sigla=None, webhook_interno=False):
+def criar(nome, prazos, webhook_url=None, prazos_resposta=None, sigla=None, webhook_interno=False, correio=None):
     if set(prazos) != set(CRITICIDADES):
         raise ValueError("informe o prazo em horas das cinco criticidades")
     prazos_resposta = prazos_resposta or PRAZOS_RESPOSTA_PADRAO
@@ -94,7 +121,7 @@ def criar(nome, prazos, webhook_url=None, prazos_resposta=None, sigla=None, webh
     pasta = CLIENTES / identificador
     pasta.mkdir(parents=True)
     try:
-        return _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, sigla, webhook_interno)
+        return _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, sigla, webhook_interno, correio)
     except Exception:
         # Instância pela metade não fica para trás, com senha padrão ou porta aberta.
         if (pasta / ".env").exists():
@@ -104,7 +131,7 @@ def criar(nome, prazos, webhook_url=None, prazos_resposta=None, sigla=None, webh
         raise
 
 
-def _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, sigla, webhook_interno):
+def _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, sigla, webhook_interno, correio):
     projeto = f"track-{identificador}"
     os.chmod(pasta, 0o700)
     shutil.copy(RAIZ / "infra/glpi/docker-compose.yml", pasta / "docker-compose.yml")
@@ -128,6 +155,8 @@ def _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, si
         _console(pasta, projeto, "user:disable", conta)
     _console(pasta, projeto, "user:create", "fachada", "-p", senha_fachada)
     _console(pasta, projeto, "user:grant", "fachada", "-p", PERFIL_FACHADA, "-e", "0", "-r")
+
+    _rodar_php(pasta, projeto, "definir_contato.php", {"usuario": "fachada", "nome": "Atendimento"})
 
     php = (RAIZ / "infra/glpi/criar_cliente_oauth.php").read_text()
     saida = _compose(pasta, projeto, "exec", "-T", "glpi", "php", input=php).stdout
@@ -162,6 +191,9 @@ def _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, si
             "action_type": "assign", "field": "slas_id_ttr", "value": str(slas[criticidade])})
         admin.pedir("POST", f"/Rule/Collection/Ticket/Rule/{regra}/Action", json={
             "action_type": "assign", "field": "slas_id_tto", "value": str(resposta)})
+
+    if correio:
+        _configurar_correio(pasta, projeto, admin, correio, sigla)
 
     webhook_segredo = None
     if webhook_url:
@@ -209,10 +241,12 @@ def main():
     c.add_argument("--sigla", help="de 2 a 8 letras maiúsculas ou números, usada no código dos chamados")
     c.add_argument("--webhook-url")
     c.add_argument("--webhook-interno", action="store_true", help="libera destino em rede privada, quando o SIEM está na mesma rede")
+    c.add_argument("--correio", help="arquivo JSON local com SMTP, IMAP, remetente e e-mail da equipe")
     c.add_argument("--saida", required=True, help="arquivo local que recebe as credenciais, com permissão 600")
     a = p.parse_args()
     r = criar(a.nome, json.loads(a.prazos), a.webhook_url,
-              json.loads(a.prazos_resposta) if a.prazos_resposta else None, a.sigla, a.webhook_interno)
+              json.loads(a.prazos_resposta) if a.prazos_resposta else None, a.sigla, a.webhook_interno,
+              json.loads(Path(a.correio).read_text()) if a.correio else None)
     saida = Path(a.saida)
     saida.touch(mode=0o600)
     saida.write_text(json.dumps(r, indent=2))

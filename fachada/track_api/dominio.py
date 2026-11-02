@@ -154,14 +154,21 @@ def tempos_do_chamado(linha, chamado):
     }
 
 
-def pausas_dos_eventos(eventos, agora=None):
-    """O motor guarda a soma das pausas; cada uma, com o motivo e quem pausou, vem dos eventos."""
+def pausas_dos_eventos(eventos, ainda_pausado, agora=None):
+    """O motor guarda a soma das pausas; cada uma, com o motivo e quem pausou, vem dos eventos.
+
+    A resposta do cliente por e-mail encerra a pausa no motor sem passar por aqui. Nesse caso a pausa
+    aparece como encerrada, mas sem duração própria: a soma do motor continua certa.
+    """
     agora = agora or datetime.now(timezone.utc)
     pausas = []
-    mudancas = [e for e in eventos if e["tipo"] in ("aberto", "em_andamento", "aguardando_cliente", "resolvido", "encerrado")]
-    for i, e in enumerate(mudancas):
-        if e["tipo"] == "aguardando_cliente":
-            fim = mudancas[i + 1]["criado_em"] if i + 1 < len(mudancas) else agora
-            pausas.append({"motivo": e["detalhe"], "autor": e["autor"], "em": _iso(e["criado_em"]),
-                           "segundos": int((fim - e["criado_em"]).total_seconds()), "em_curso": i + 1 == len(mudancas)})
+    for i, e in enumerate(eventos):
+        if e["tipo"] != "aguardando_cliente":
+            continue
+        fim = next((x["criado_em"] for x in eventos[i + 1:] if x["status"] != "aguardando_cliente"), None)
+        em_curso = fim is None and ainda_pausado
+        if em_curso:
+            fim = agora
+        pausas.append({"motivo": e["detalhe"], "autor": e["autor"], "em": _iso(e["criado_em"]),
+                       "segundos": int((fim - e["criado_em"]).total_seconds()) if fim else None, "em_curso": em_curso})
     return pausas

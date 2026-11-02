@@ -155,7 +155,7 @@ def consultar(cliente_id: UUID, numero: int, pessoa=Depends(pessoa_pronta)):
     chamado = motor_do_cliente(cliente).chamado(numero)
     return {**_do_cliente(representar(linha, chamado), cliente),
             "contato": {"telefone": linha["contato_telefone"], "email": linha["contato_email"]},
-            "tempos": tempos_do_chamado(linha, chamado), "pausas": operacoes.pausas(cliente, numero), "anexos": operacoes.anexos(cliente, numero)}
+            "tempos": tempos_do_chamado(linha, chamado), "pausas": operacoes.pausas(cliente, numero, chamado["status"]["id"] == AGUARDANDO_CLIENTE), "anexos": operacoes.anexos(cliente, numero)}
 
 
 @router.get("/clientes/{cliente_id}/chamados/{numero}/historico")
@@ -176,6 +176,11 @@ def _operar(pessoa, cliente_id, numero, permitidos, tipo, acao, detalhe=None):
 def assumir(cliente_id: UUID, numero: int, pessoa=Depends(_exigir_analista)):
     def acao(motor, conn):
         operacoes.assumir(conn, numero, pessoa["nome"], pessoa["id"])
+        # O atendente precisa estar no motor: é ele quem avisa essa pessoa e decide para onde o chamado volta
+        # quando o cliente responde numa pausa. Sem atendente, voltaria para Aberto.
+        sombra = conn.execute("SELECT motor_id FROM sombras WHERE pessoa_id = %s AND cliente_id = %s",
+                              (pessoa["id"], cliente_id)).fetchone()
+        motor.ligar_pessoa(numero, sombra["motor_id"], "assigned")
         motor.mudar_status(numero, EM_ANDAMENTO)
     # Escalar atribui grupo, e o motor passa o chamado para Em andamento antes de alguém assumir.
     return _operar(pessoa, cliente_id, numero, {ABERTO, EM_ANDAMENTO}, "em_andamento", acao)

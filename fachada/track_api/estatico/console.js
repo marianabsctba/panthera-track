@@ -1,7 +1,7 @@
 const CRIT = {critica:"Crítica",alta:"Alta",media:"Média",baixa:"Baixa",consulta:"Consulta"};
 const SIT = {aberto:"Aberto",em_andamento:"Em andamento",aguardando_cliente:"Aguardando cliente",resolvido:"Resolvido",encerrado:"Encerrado"};
 const EV = {aberto:"Abertura",em_andamento:"Em andamento",andamento:"Andamento registrado",comentario:"Comentário do cliente",aguardando_cliente:"Aguardando o cliente",resolvido:"Resolução",encerrado:"Encerramento",escalado:"Escalado",classificado:"Classificação alterada",anexo:"Anexo incluído"};
-const ORIGEM = {siem:"SIEM",portal:"Portal",telefone:"Telefone"};
+const ORIGEM = {siem:"SIEM",portal:"Portal",telefone:"Telefone",email:"E-mail"};
 const TIPO = {incidente:"Incidente",requisicao:"Requisição"};
 const CATEGORIA = {acesso:"Acesso",malware:"Malware",rede:"Rede",vazamento:"Vazamento de dados",vulnerabilidade:"Vulnerabilidade",disponibilidade:"Disponibilidade",duvida:"Dúvida",outro:"Outro"};
 let eu = null, fila = {chamados:[], indisponiveis:[], clientes:[]}, selecionado = null, lidoEm = Date.now(), relogios = [];
@@ -119,7 +119,7 @@ function blocoSla(c) {
   partes.push(el("dl", {className:"dados"}, ...par("Tempo corrido", duracao(s.segundos_corridos)), ...par("Tempo em pausa", duracao(s.segundos_pausados)), ...tempos));
   if (c.pausas.length) partes.push(el("h3", {textContent:"Pausas"}), ...c.pausas.map(p => el("div", {className:"evento"},
     el("div", {textContent:p.motivo || "Sem motivo registrado"}),
-    el("div", {className:"apagado", textContent:`${hora(p.em)}, ${p.autor}, ${p.em_curso ? "em curso há " : "durou "}${duracao(p.segundos)}`}))));
+    el("div", {className:"apagado", textContent:`${hora(p.em)}, ${p.autor}, ${p.segundos === null ? "encerrada pela resposta do cliente" : (p.em_curso ? "em curso há " : "durou ") + duracao(p.segundos)}`}))));
   return partes;
 }
 function blocoContexto(c) {

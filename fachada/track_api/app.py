@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import banco, operacoes, sessao, tela
+from . import banco, operacoes, sessao, sincronia, tela
 from .dominio import (ABERTO, AGUARDANDO_CLIENTE, EM_ANDAMENTO, ENCERRADO, PADRAO_CATEGORIA, PADRAO_CRITICIDADE, PADRAO_TIPO,
                       RESOLVIDO, Contexto, representar)
 from .motor import MotorIndisponivel, motor_do_cliente
@@ -23,7 +24,10 @@ _ESTATICO = Path(__file__).resolve().parent / "estatico"
 
 @asynccontextmanager
 async def _vida(_app):
+    parar = threading.Event()
+    sincronia.iniciar(parar)
     yield
+    parar.set()
     banco.fechar()
 
 
