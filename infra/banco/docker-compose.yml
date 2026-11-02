@@ -1,0 +1,21 @@
+services:
+  banco:
+    image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+    container_name: track-banco
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: track
+      POSTGRES_USER: track_dono
+      POSTGRES_PASSWORD: ${TRACK_SENHA_DONO:?}
+    volumes:
+      - track_banco:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U track_dono -d track"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  track_banco:

@@ -1,0 +1,38 @@
+# Uma pilha desta por cliente. O nome do projeto e o .env vêm da provisão.
+services:
+  glpi:
+    image: glpi/glpi:12.0.1@sha256:f1a08a72afa579393e8bda76edbe9adad00591b5a2228d7953cadc7f04e221be
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GLPI_DB_HOST: db
+      GLPI_DB_PORT: "3306"
+      GLPI_DB_NAME: glpi
+      GLPI_DB_USER: glpi
+      GLPI_DB_PASSWORD: ${SENHA_BANCO:?}
+    volumes:
+      - glpi_dados:/var/glpi
+    ports:
+      - "127.0.0.1:${PORTA_GLPI:?}:80"
+
+  db:
+    image: mariadb:11.4@sha256:d1891ede5a559f1086f55053bb8cc1569b0298338c4d72d71725a7f74f6ba620
+    restart: unless-stopped
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+      MARIADB_DATABASE: glpi
+      MARIADB_USER: glpi
+      MARIADB_PASSWORD: ${SENHA_BANCO:?}
+    volumes:
+      - banco_dados:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  glpi_dados:
+  banco_dados:
