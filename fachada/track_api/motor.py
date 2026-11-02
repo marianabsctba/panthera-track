@@ -7,7 +7,7 @@ import httpx
 
 from .banco import decifrar, transacao
 
-PERFIL_FACHADA = "6"  # Technician, na instalação padrão
+PERFIL_FACHADA = "7"  # Supervisor, na instalação padrão: o técnico não pode atribuir grupo
 PERFIL_CLIENTE = "1"  # Self-Service, na instalação padrão
 
 
@@ -82,6 +82,9 @@ class Motor:
 
     def classificar(self, numero, tipo, categoria):
         self.pedir("PATCH", f"/Assistance/Ticket/{numero}", json={"type": tipo, "category": categoria})
+
+    def atribuir_grupo(self, numero, grupo):
+        self.pedir("POST", f"/Assistance/Ticket/{numero}/TeamMember", json={"type": "Group", "id": grupo, "role": "assigned"})
 
     def acompanhamento(self, numero, texto):
         self.pedir("POST", f"/Assistance/Ticket/{numero}/Timeline/Followup", json={"content": texto})

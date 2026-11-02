@@ -20,7 +20,10 @@ import pyotp
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "fachada"))
 
+from psycopg.rows import dict_row  # noqa: E402
 from track_api import pessoas, provisao  # noqa: E402
+from track_api.banco import decifrar  # noqa: E402
+from track_api.motor import Motor  # noqa: E402
 
 API = "http://127.0.0.1:8711"
 PRAZOS = {"critica": 4, "alta": 8, "media": 24, "baixa": 48, "consulta": 72}
@@ -262,6 +265,63 @@ def principal():
         confere("não registra em cliente sem vínculo", r.status_code == 404, r.text)
         r = c.post("/api/v1/tela/chamados", json={"titulo": "x", "descricao": "x", "criticidade": "alta"})
         confere("telefone exige cliente e quem pediu", r.status_code == 422)
+
+        # Escalonamento manual
+        r = c.post("/api/v1/tela/chamados", json={"titulo": "Para escalar", "descricao": "x", "criticidade": "alta", "cliente_id": cid_a, "solicitante": "Rui"})
+        esc = r.json()
+        confere("chamado nasce em N1 e Aberto", esc["nivel"] == "N1" and esc["status"] == "aberto", esc)
+        pe = f"/api/v1/tela/clientes/{cid_a}/chamados/{esc['numero']}"
+        confere("pessoa do cliente não escala", cg.post(pe + "/escalar", json={"nivel": "N2", "motivo": "x"}).status_code == 403)
+        confere("analista sem vínculo não escala", cc.post(f"/api/v1/tela/clientes/{cid_b}/chamados/{num_b}/escalar", json={"nivel": "N2", "motivo": "x"}).status_code == 404)
+        confere("escalar exige motivo", c.post(pe + "/escalar", json={"nivel": "N2", "motivo": ""}).status_code == 422)
+        confere("nível inexistente recusado", c.post(pe + "/escalar", json={"nivel": "N9", "motivo": "x"}).status_code == 422)
+        r = c.post(pe + "/escalar", json={"nivel": "N2", "motivo": "Precisa de análise forense"})
+        d2 = r.json()
+        confere("escala para N2", r.status_code == 200 and d2["nivel"] == "N2", r.text)
+        confere("escalar não muda criticidade nem prazo", d2["criticidade"] == "alta" and d2["sla"]["prazo"] == esc["sla"]["prazo"], d2["sla"])
+        confere("não volta nem repete o nível", c.post(pe + "/escalar", json={"nivel": "N2", "motivo": "x"}).status_code == 409)
+        confere("escalar não conta como primeira resposta", d2["atendente"] is None and d2["sla"]["resposta"]["em"] is None, d2["sla"])
+        r = c.post(pe + "/assumir")
+        confere("escalado sem atendente ainda pode ser assumido", r.status_code == 200 and r.json()["atendente"] == "Ana Rocha", r.text)
+        confere("assumir conta como primeira resposta", r.json()["sla"]["resposta"]["cumprida"] is True, r.json()["sla"])
+        confere("quem já tem atendente não é assumido de novo", c.post(pe + "/assumir").status_code == 409)
+        r = c.post(pe + "/escalar", json={"nivel": "N3", "motivo": "Risco alto"})
+        confere("escala para N3", r.status_code == 200 and r.json()["nivel"] == "N3", r.text)
+        h = c.get(pe + "/historico").json()
+        confere("motivo fica no histórico com o autor", any(e["tipo"] == "escalado" and e["detalhe"] == "N3: Risco alto" and e["autor"] == "Ana Rocha" for e in h["eventos"]), h["eventos"])
+        confere("fila mostra o nível", next(x["nivel"] for x in c.get("/api/v1/tela/chamados").json()["chamados"] if x["numero"] == esc["numero"] and x["cliente_id"] == cid_a) == "N3")
+
+        # Escalonamento automático, nativo, com um prazo curto de verdade
+        pasta_a, projeto_a = provisao.CLIENTES / a["identificador"], f"track-{a['identificador']}"
+        tarefa = provisao._compose(pasta_a, projeto_a, "exec", "-T", "db", "sh", "-c",
+                                   'mariadb -uglpi -p"$MARIADB_PASSWORD" glpi -N -e "select mode, frequency from glpi_crontasks where name=\'slaticket\'"').stdout.split()
+        confere("tarefa de escalonamento roda sozinha a cada minuto", tarefa == ["2", "60"], tarefa)
+        with psycopg.connect(os.environ["TRACK_BANCO_DONO_DSN"], row_factory=dict_row) as conn:
+            la = conn.execute("SELECT * FROM clientes WHERE id = %s", (cid_a,)).fetchone()
+        senha_admin = next(x.split("=", 1)[1] for x in (pasta_a / ".env").read_text().splitlines() if x.startswith("SENHA_ADMIN="))
+        admin = Motor(la["motor_url"], la["motor_oauth_id"], decifrar(la["motor_oauth_segredo"]), "glpi", senha_admin)
+        slm = admin.pedir("GET", "/Setup/SLM")[0]["id"]
+        curto = admin.pedir("POST", "/Setup/SLA", json={"name": "Curto", "slm": slm, "entity": 0, "is_recursive": True, "type": 0, "time": 1,
+                                                        "time_unit": "minute", "use_ticket_calendar": False})["id"]
+        provisao.criar_niveis_de_sla(pasta_a, projeto_a, curto, la["grupos"], 60)
+        r = c.post("/api/v1/tela/chamados", json={"titulo": "Vai vencer", "descricao": "x", "criticidade": "critica", "cliente_id": cid_a, "solicitante": "Rui"})
+        auto = r.json()
+        pu = f"/api/v1/tela/clientes/{cid_a}/chamados/{auto['numero']}"
+        admin.pedir("PATCH", f"/Assistance/Ticket/{auto['numero']}", json={"sla_ttr": curto})
+        print("esperando o prazo vencer e a tarefa rodar...", flush=True)
+        limite = time.time() + 240
+        visto = None
+        while time.time() < limite:
+            visto = c.get(pu).json()
+            if visto["nivel"] == "N3":
+                break
+            time.sleep(5)
+        confere("prazo vencido escala sozinho até N3", visto["nivel"] == "N3", visto)
+        confere("escalonamento automático não muda a criticidade", visto["criticidade"] == "critica" and admin.chamado(auto["numero"])["priority"] == 5, visto)
+        confere("escalonamento automático não finge primeira resposta", visto["sla"]["resposta"]["em"] is None, visto["sla"])
+        confere("chamado estourado aparece como tal", visto["sla"]["estourado"] is True, visto["sla"])
+        r = c.post(pu + "/assumir")
+        confere("chamado escalado sozinho pode ser assumido", r.status_code == 200 and r.json()["atendente"] == "Ana Rocha", r.text)
 
         # Banco e instância fora do ar
         with psycopg.connect(os.environ["TRACK_BANCO_DSN"]) as conn:

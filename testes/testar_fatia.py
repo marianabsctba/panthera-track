@@ -157,6 +157,7 @@ def principal():
         confere("atende", r.status_code == 200 and r.json()["status"] == "em_andamento", r.text)
         confere("registra atendente", r.json().get("atendente") == "Ana Analista")
         confere("primeira resposta cumprida ao atender", r.json()["sla"]["resposta"]["cumprida"] is True, r.json()["sla"])
+        confere("não assume duas vezes", pedir(atend, "POST", p + "/atender", {"atendente": "Outra"}).status_code == 409)
         r = pedir(atend, "POST", p + "/andamento", {"texto": "Bloqueado o IP de origem"})
         confere("registra andamento", r.status_code == 200, r.text)
         prazo_antes = data(r.json()["sla"]["prazo"])

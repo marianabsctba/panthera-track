@@ -35,6 +35,14 @@ if (!$api) {
     exit(1);
 }
 
+// De fábrica o escalonamento roda em modo interno, a cada 5 minutos, e depende de alguém acessar a tela do GLPI.
+$tarefa = new CronTask();
+if (!$tarefa->getFromDBbyName('SlaLevel_Ticket', 'slaticket')
+    || !$tarefa->update(['id' => $tarefa->getID(), 'mode' => CronTask::MODE_EXTERNAL, 'frequency' => 60])) {
+    fwrite(STDERR, "não foi possível ajustar a tarefa de escalonamento\n");
+    exit(1);
+}
+
 echo json_encode([
     'id'      => $cliente->fields['identifier'],
     'segredo' => (new GLPIKey())->decrypt($cliente->fields['secret']),

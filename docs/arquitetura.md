@@ -7,15 +7,16 @@ Usar o que o GLPI já faz e customizar só o que ele não tem.
 | Recurso | Quem faz |
 |---|---|
 | Chamado, status, acompanhamento e solução | GLPI |
-| Prazos de resolução e de primeira resposta, pausa e durações | GLPI (SLA, regras e estatísticas do chamado) |
+| Prazo de resolução, pausa e durações | GLPI (SLA, regras e estatísticas do chamado) |
 | Categorias e tipo | GLPI |
 | Anexos e hash do arquivo | GLPI (documentos ligados ao chamado) |
 | Autor real das ações | GLPI (com um usuário-sombra por pessoa) |
 | Status de volta ao SIEM, com assinatura e retentativa | GLPI (webhook nativo) |
+| Escalonamento automático por prazo e grupos N2 e N3 | GLPI (níveis de SLA e grupos) |
 | Tela, login com segundo fator e fila única entre instâncias | Nosso: o GLPI enxerga uma instância só e a tela não pode revelar a ferramenta |
 | Contexto do SIEM e contato de quem pediu | Nosso: o GLPI não guarda isso por chamado |
 | Eventos com autor e motivo, e SHA-256 dos anexos | Nosso: a API do GLPI não expõe o log de alterações |
-| Prazo calculado da primeira resposta | Nosso, numa conta só: a API informa o SLA e a hora da resposta, mas não o prazo |
+| Primeira resposta | Nosso: a API não informa o prazo, e o motor marca a tomada de conhecimento até em escalonamento automático |
 
 Antes de construir qualquer coisa, a pergunta é se o GLPI já faz.
 
@@ -35,7 +36,8 @@ Antes de construir qualquer coisa, a pergunta é se o GLPI já faz.
 12. **O código é sigla + número, como `ALFA-0001`.** Cada instância conta do 1, então o número sozinho repete entre clientes. Uma sequência global mostraria a um cliente o volume dos outros.
 13. **Anexos ficam no motor.** A API nova ignora o arquivo enviado, então só o envio usa a API antiga, numa sessão curta, liberada apenas para a rede interna do Docker. A fachada confere extensão e tamanho, entrega sempre como download, confere se o documento é daquele chamado e grava o SHA-256 no histórico.
 14. **O status volta ao SIEM pelo webhook nativo**, que também pega mudanças feitas fora da fachada. Por isso o contrato é um aviso curto seguido de consulta, sem ordem garantida.
-15. **Telefone e e-mail de contato não saem do chamado.** Não vão ao SIEM, à fila nem aos eventos, que são imutáveis: assim dá para apagar o contato depois sem mexer no histórico. O contexto do SIEM recusa campo desconhecido.
+15. **Escalonar muda quem atende, nunca a criticidade nem o prazo.** N1 é o atendimento normal, sem grupo, porque atribuir grupo na abertura tiraria o chamado de Aberto. Vencido o prazo, o motor manda para N2; passada mais metade do prazo, para N3. O analista também escala à mão, com motivo, sempre para cima. O nível é o grupo mais alto da equipe do chamado.
+16. **Telefone e e-mail de contato não saem do chamado.** Não vão ao SIEM, à fila nem aos eventos, que são imutáveis: assim dá para apagar o contato depois sem mexer no histórico. O contexto do SIEM recusa campo desconhecido.
 
 ## Componentes
 
@@ -62,6 +64,10 @@ Testado na versão 12.0.1:
 - O webhook nativo recusa destino em rede privada. A liberação é por contexto, num arquivo em `/var/www/glpi/config`, e não na pasta de dados.
 - A assinatura do webhook é HMAC-SHA256 de corpo + hora, nos cabeçalhos `X-GLPI-signature` e `X-GLPI-timestamp`.
 - Categoria e SLA de resposta valem também para o perfil de autoatendimento.
+- Atribuir grupo passa o chamado para Em andamento e marca a tomada de conhecimento, mesmo sem ninguém assumir. Por isso, assumir vale nos dois status, se ainda não houver atendente, e a primeira resposta é contada na fachada, quando uma pessoa assume.
+- O técnico não pode atribuir grupo; o supervisor pode. A fachada e os analistas usam o perfil de supervisor.
+- A API cria o nível de SLA, mas não as ações dele, então isso roda como código dentro do motor.
+- A tarefa de escalonamento vem em modo interno, a cada 5 minutos, e só roda com acesso à tela do GLPI. A provisão passa para externa, a cada minuto.
 - A API não tem rota para o log de alterações do chamado. Mudanças feitas fora da fachada precisarão de webhook do motor ou do plugin.
 
 ## Mapeamentos
@@ -106,6 +112,7 @@ Testado na versão 12.0.1:
 | Contexto do incidente vindo do SIEM | Pronto; a mudança no Roar para enviá-lo vem depois |
 | Primeira resposta, barra dos prazos, durações do motor e motivo de cada pausa | Pronto |
 | Contato de quem pediu e anexos | Pronto |
+| Escalonamento manual e automático, com N2 e N3 | Pronto; o aviso por e-mail em 75% do prazo vem com a fatia de avisos, e a fila já marca Em risco |
 | Abertura por e-mail | Falta |
 | Aviso eletrônico a cada movimentação | Falta |
 | Busca por período, chamado, criticidade, situação e solicitante | Falta |
@@ -123,6 +130,7 @@ O GLPI é GPL-3.0. Código que roda dentro dele, como o plugin, herda a GPL. A f
 - As tabelas de pessoas não têm RLS, porque o login precisa achar a pessoa antes de saber o cliente. O alcance é conferido na aplicação; chamados e eventos seguem com RLS.
 - O bloqueio por tentativas é por conta: alguém pode travar uma conta de propósito errando a senha, por 15 minutos.
 - A fila lista até 200 chamados por cliente, até existir a busca.
+- O escalonamento automático aparece no nível do chamado, mas não gera evento, porque acontece dentro do motor. Entra quando o histórico completo for resolvido.
 - Sem antivírus nos anexos por enquanto: o download nunca abre na tela, mas quem baixa precisa de cuidado.
 - A API antiga fica ligada só para o envio de anexos, restrita à rede interna do Docker. Se a API nova passar a receber arquivo, ela sai.
 - O motivo de pausa ainda é texto livre. O motor tem motivos de pendência nativos, com lembrete e resolução automáticos, que podem entrar quando o processo de atendimento for definido.

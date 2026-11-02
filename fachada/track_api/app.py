@@ -160,9 +160,10 @@ def _quem(eu, numero):
 @app.post("/api/v1/chamados/{numero}/atender")
 def atender(numero: int, corpo: Atendimento, eu: Identidade = Depends(exigir_atendente)):
     def acao(motor, conn):
-        conn.execute("UPDATE chamados SET atendente = %s WHERE numero = %s", (corpo.atendente, numero))
+        operacoes.assumir(conn, numero, corpo.atendente)
         motor.mudar_status(numero, EM_ANDAMENTO)
-    return operacoes.transicao(eu.cliente, numero, {ABERTO}, "em_andamento", corpo.atendente, acao)
+    # Escalar atribui grupo, e o motor passa o chamado para Em andamento antes de alguém assumir.
+    return operacoes.transicao(eu.cliente, numero, {ABERTO, EM_ANDAMENTO}, "em_andamento", corpo.atendente, acao)
 
 
 @app.post("/api/v1/chamados/{numero}/andamento")

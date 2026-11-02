@@ -63,6 +63,7 @@ A mensagem assinada é `{data}.{MÉTODO}.{caminho com query}.{sha256 do corpo em
   "descricao": "<p>Texto do incidente</p>",
   "criticidade": "critica",
   "status": "em_andamento",
+  "nivel": "N1",
   "solicitante": "SIEM",
   "atendente": "Nome",
   "aberto_em": "2026-11-02T12:27:33+00:00",

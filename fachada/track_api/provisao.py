@@ -19,7 +19,7 @@ import httpx
 import psycopg
 
 from .banco import cifrar
-from .dominio import CATEGORIAS, CRITICIDADES
+from .dominio import CATEGORIAS, CRITICIDADES, NIVEIS
 from .motor import PERFIL_FACHADA, Motor
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -71,6 +71,14 @@ def _sigla_livre(nome):
     if base not in usadas:
         return base
     return next(f"{base}{n}" for n in range(2, 100) if f"{base}{n}" not in usadas)
+
+
+def criar_niveis_de_sla(pasta, projeto, sla, grupos, segundos_do_prazo):
+    """Vencido o prazo, vai para N2; passada mais metade dele, para N3. Só muda o grupo, nunca a criticidade."""
+    niveis = [{"nome": "N2 no vencimento", "segundos": 0, "grupo": grupos["N2"]},
+              {"nome": "N3 depois do vencimento", "segundos": segundos_do_prazo // 2, "grupo": grupos["N3"]}]
+    _compose(pasta, projeto, "exec", "-T", "glpi", "php", "--", json.dumps({"sla": sla, "niveis": niveis}),
+             input=(RAIZ / "infra/glpi/criar_niveis_sla.php").read_text())
 
 
 def criar(nome, prazos, webhook_url=None, prazos_resposta=None, sigla=None, webhook_interno=False):
@@ -133,12 +141,15 @@ def _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, si
                   for chave, rotulo in CATEGORIAS.items()}
     for extensao, tipo_mime in _EXTENSOES_EXTRAS.items():
         admin.pedir("POST", "/Dropdowns/DocumentType", json={"name": extensao, "extension": extensao, "mime": tipo_mime, "is_uploadable": True})
+    grupos = {nivel: admin.pedir("POST", "/Administration/Group", json={
+        "name": nivel, "entity": 0, "is_recursive": True, "maybe_assigned": True, "maybe_notified": True})["id"] for nivel in NIVEIS[1:]}
     slas = {}
     for criticidade, horas in prazos.items():
         slas[criticidade] = admin.pedir("POST", "/Setup/SLA", json={
             "name": f"Resolução {criticidade}", "slm": slm, "entity": 0, "is_recursive": True,
             "type": 0, "time": horas, "time_unit": "hour", "use_ticket_calendar": False})["id"]
         # A regra vale para qualquer canal, inclusive e-mail, e o perfil da fachada não precisa do direito de SLA.
+        criar_niveis_de_sla(pasta, projeto, slas[criticidade], grupos, horas * 3600)
         resposta = admin.pedir("POST", "/Setup/SLA", json={
             "name": f"Resposta {criticidade}", "slm": slm, "entity": 0, "is_recursive": True,
             "type": 1, "time": prazos_resposta[criticidade], "time_unit": "minute", "use_ticket_calendar": False})["id"]
@@ -166,10 +177,10 @@ def _montar(identificador, pasta, nome, prazos, webhook_url, prazos_resposta, si
     }
     with psycopg.connect(os.environ["TRACK_BANCO_DONO_DSN"]) as conn:
         cliente_id = conn.execute(
-            """INSERT INTO clientes (nome, identificador, sigla, categorias, prazos_resposta, motor_url, motor_oauth_id,
+            """INSERT INTO clientes (nome, identificador, sigla, categorias, grupos, prazos_resposta, motor_url, motor_oauth_id,
                                      motor_oauth_segredo, motor_usuario, motor_senha, slas)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'fachada', %s, %s) RETURNING id""",
-            (nome, identificador, sigla, json.dumps(categorias), json.dumps(prazos_resposta), url, oauth["id"],
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'fachada', %s, %s) RETURNING id""",
+            (nome, identificador, sigla, json.dumps(categorias), json.dumps(grupos), json.dumps(prazos_resposta), url, oauth["id"],
              cifrar(oauth["segredo"]), cifrar(senha_fachada), json.dumps(slas))).fetchone()[0]
         for papel, c in credenciais.items():
             conn.execute("INSERT INTO credenciais (chave, cliente_id, segredo, papel) VALUES (%s, %s, %s, %s)",

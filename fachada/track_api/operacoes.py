@@ -71,6 +71,14 @@ def transicao(cliente, numero, permitidos, tipo, autor, acao, escritor=None, pes
     return saida
 
 
+def assumir(conn, numero, atendente, pessoa_id=None):
+    if conn.execute("SELECT atendente FROM chamados WHERE numero = %s", (numero,)).fetchone()["atendente"]:
+        raise HTTPException(409, "O chamado já tem atendente")
+    conn.execute(
+        """UPDATE chamados SET atendente = %s, pessoa_atendente = %s, primeira_resposta_em = COALESCE(primeira_resposta_em, now())
+           WHERE numero = %s""", (atendente, pessoa_id, numero))
+
+
 def _eventos(cliente, numero):
     with banco.transacao(cliente["id"]) as conn:
         return conn.execute(

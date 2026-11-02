@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from pydantic import BaseModel, Field
 
 from . import banco, operacoes
-from .dominio import (ABERTO, AGUARDANDO_CLIENTE, CATEGORIAS, EM_ANDAMENTO, ENCERRADO, PADRAO_CATEGORIA, PADRAO_CRITICIDADE,
-                      PADRAO_TIPO, RESOLVIDO, TIPOS, representar, tempos_do_motor)
+from .dominio import (ABERTO, AGUARDANDO_CLIENTE, CATEGORIAS, EM_ANDAMENTO, ENCERRADO, NIVEIS, PADRAO_CATEGORIA, PADRAO_CRITICIDADE,
+                      PADRAO_TIPO, RESOLVIDO, TIPOS, nivel_do_chamado, representar, tempos_do_chamado)
 from .motor import MotorIndisponivel, motor_da_pessoa, motor_do_cliente
 from .sessao import checar_origem, pessoa_pronta
 
@@ -38,6 +38,11 @@ class NovoChamado(BaseModel):
 
 class Texto(BaseModel):
     texto: str = Field(min_length=1, max_length=65000)
+
+
+class Escalonamento(BaseModel):
+    nivel: str = Field(pattern="^(N2|N3)$")
+    motivo: str = Field(min_length=1, max_length=65000)
 
 
 class Classificacao(BaseModel):
@@ -150,7 +155,7 @@ def consultar(cliente_id: UUID, numero: int, pessoa=Depends(pessoa_pronta)):
     chamado = motor_do_cliente(cliente).chamado(numero)
     return {**_do_cliente(representar(linha, chamado), cliente),
             "contato": {"telefone": linha["contato_telefone"], "email": linha["contato_email"]},
-            "tempos": tempos_do_motor(chamado), "pausas": operacoes.pausas(cliente, numero), "anexos": operacoes.anexos(cliente, numero)}
+            "tempos": tempos_do_chamado(linha, chamado), "pausas": operacoes.pausas(cliente, numero), "anexos": operacoes.anexos(cliente, numero)}
 
 
 @router.get("/clientes/{cliente_id}/chamados/{numero}/historico")
@@ -170,9 +175,25 @@ def _operar(pessoa, cliente_id, numero, permitidos, tipo, acao, detalhe=None):
 @router.post("/clientes/{cliente_id}/chamados/{numero}/assumir")
 def assumir(cliente_id: UUID, numero: int, pessoa=Depends(_exigir_analista)):
     def acao(motor, conn):
-        conn.execute("UPDATE chamados SET atendente = %s, pessoa_atendente = %s WHERE numero = %s", (pessoa["nome"], pessoa["id"], numero))
+        operacoes.assumir(conn, numero, pessoa["nome"], pessoa["id"])
         motor.mudar_status(numero, EM_ANDAMENTO)
-    return _operar(pessoa, cliente_id, numero, {ABERTO}, "em_andamento", acao)
+    # Escalar atribui grupo, e o motor passa o chamado para Em andamento antes de alguém assumir.
+    return _operar(pessoa, cliente_id, numero, {ABERTO, EM_ANDAMENTO}, "em_andamento", acao)
+
+
+@router.post("/clientes/{cliente_id}/chamados/{numero}/escalar")
+def escalar(cliente_id: UUID, numero: int, corpo: Escalonamento, pessoa=Depends(_exigir_analista)):
+    cliente = _cliente(pessoa, cliente_id)
+
+    def acao(motor, _conn):
+        atual = nivel_do_chamado(motor_do_cliente(cliente).chamado(numero))
+        if NIVEIS.index(corpo.nivel) <= NIVEIS.index(atual):
+            raise HTTPException(409, f"O chamado já está em {atual}")
+        # Só muda quem atende: criticidade e prazo continuam os mesmos.
+        motor.atribuir_grupo(numero, cliente["grupos"][corpo.nivel])
+        motor.acompanhamento(numero, operacoes.html(f"Escalado para {corpo.nivel}: {corpo.motivo}"))
+    return _operar(pessoa, cliente_id, numero, {ABERTO, EM_ANDAMENTO, AGUARDANDO_CLIENTE}, "escalado", acao,
+                   detalhe=f"{corpo.nivel}: {corpo.motivo}")
 
 
 @router.post("/clientes/{cliente_id}/chamados/{numero}/classificar")

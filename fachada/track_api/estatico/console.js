@@ -1,6 +1,6 @@
 const CRIT = {critica:"Crítica",alta:"Alta",media:"Média",baixa:"Baixa",consulta:"Consulta"};
 const SIT = {aberto:"Aberto",em_andamento:"Em andamento",aguardando_cliente:"Aguardando cliente",resolvido:"Resolvido",encerrado:"Encerrado"};
-const EV = {aberto:"Abertura",em_andamento:"Em andamento",andamento:"Andamento registrado",comentario:"Comentário do cliente",aguardando_cliente:"Aguardando o cliente",resolvido:"Resolução",encerrado:"Encerramento",classificado:"Classificação alterada",anexo:"Anexo incluído"};
+const EV = {aberto:"Abertura",em_andamento:"Em andamento",andamento:"Andamento registrado",comentario:"Comentário do cliente",aguardando_cliente:"Aguardando o cliente",resolvido:"Resolução",encerrado:"Encerramento",escalado:"Escalado",classificado:"Classificação alterada",anexo:"Anexo incluído"};
 const ORIGEM = {siem:"SIEM",portal:"Portal",telefone:"Telefone"};
 const TIPO = {incidente:"Incidente",requisicao:"Requisição"};
 const CATEGORIA = {acesso:"Acesso",malware:"Malware",rede:"Rede",vazamento:"Vazamento de dados",vulnerabilidade:"Vulnerabilidade",disponibilidade:"Disponibilidade",duvida:"Dúvida",outro:"Outro"};
@@ -73,7 +73,7 @@ function desenhaLista() {
     const marcado = selecionado && c.numero === selecionado.numero && c.cliente_id === selecionado.cliente_id;
     const tr = el("tr", {className:"item" + (marcado ? " sel" : "")}, el("td", {className:"codigo", textContent:c.codigo}));
     if (analista()) tr.append(el("td", {textContent:c.cliente}));
-    tr.append(el("td", {}, c.titulo, el("div", {className:"apagado", textContent:`${TIPO[c.tipo]}, ${c.categoria || "Sem categoria"}. ${ORIGEM[c.origem]}, ${hora(c.aberto_em)}`})),
+    tr.append(el("td", {}, c.titulo, ...(c.nivel !== "N1" ? [" ", el("span", {className:"selo nivel", textContent:c.nivel})] : []), el("div", {className:"apagado", textContent:`${TIPO[c.tipo]}, ${c.categoria || "Sem categoria"}. ${ORIGEM[c.origem]}, ${hora(c.aberto_em)}`})),
       el("td", {}, el("span", {className:"selo c-" + c.criticidade, textContent:CRIT[c.criticidade]})),
       el("td", {}, el("span", {className:"selo s-" + c.status, textContent:SIT[c.status]})), el("td", {}, textoSla(c)));
     tr.onclick = () => abrirChamado(c.cliente_id, c.numero);
@@ -113,7 +113,7 @@ function blocoSla(c) {
     const classe = s.estourado ? "tarde-b" : encerrado ? "ok-b" : s.em_risco || s.pausado ? "risco-b" : "";
     partes.push(barraPrazo("Resolução", s.percentual, classe, texto));
   }
-  const t = c.tempos, tempos = [...par("Até assumir", duracao(t.ate_assumir)), ...par("Aguardando cliente", duracao(t.aguardando_cliente))];
+  const t = c.tempos, tempos = [...par("Até assumir", t.ate_assumir === null ? "Ninguém assumiu" : duracao(t.ate_assumir)), ...par("Aguardando cliente", duracao(t.aguardando_cliente))];
   if (c.resolvido_em) tempos.push(...par("Até resolver, sem pausas", duracao(t.ate_resolver)));
   if (c.encerrado_em) tempos.push(...par("Até encerrar", duracao(t.ate_encerrar)));
   partes.push(el("dl", {className:"dados"}, ...par("Tempo corrido", duracao(s.segundos_corridos)), ...par("Tempo em pausa", duracao(s.segundos_pausados)), ...tempos));
@@ -145,6 +145,19 @@ function blocoClassificacao(c) {
   };
   return [el("div", {className:"acoes"}, el("div", {className:"duas"}, t, g), b)];
 }
+function blocoEscalar(c) {
+  if (!analista() || !["aberto","em_andamento","aguardando_cliente"].includes(c.status) || c.nivel === "N3") return [];
+  const niveis = c.nivel === "N1" ? ["N2","N3"] : ["N3"];
+  const n = el("select", {id:"novo-nivel"}, ...niveis.map(v => el("option", {value:v, textContent:v})));
+  const m = el("input", {id:"motivo-escala", placeholder:"Motivo do escalonamento", maxLength:1000});
+  const b = el("button", {textContent:"Escalar"});
+  b.onclick = async () => {
+    b.disabled = true;
+    try { await api("POST", `${rota(selecionado)}/escalar`, {nivel:n.value, motivo:m.value.trim()}); await recarregarDetalhe(); }
+    catch (e) { $("erro").textContent = e.message; b.disabled = false; }
+  };
+  return [el("div", {className:"anexo-novo"}, n, m, b)];
+}
 function blocoAnexos(c) {
   const lista = c.anexos.map(a => el("div", {className:"evento"},
     el("a", {href:`${rota(selecionado)}/anexos/${a.id}`, textContent:a.nome, download:a.nome}),
@@ -172,8 +185,8 @@ async function abrirChamado(cliente_id, numero) {
   const btns = [];
   let dica = null;
   if (analista()) {
-    if (c.status === "aberto") btns.push(acao("Assumir atendimento", "assumir", {forte:true}));
-    if (c.status === "em_andamento") { dica = "Solução, andamento ou motivo da espera"; btns.push(acao("Resolver", "resolver", {forte:true, texto:true}), acao("Registrar andamento", "andamento", {texto:true}), acao("Aguardar cliente", "pausar", {texto:true})); }
+    if (c.status === "aberto" || (c.status === "em_andamento" && !c.atendente)) btns.push(acao("Assumir atendimento", "assumir", {forte:true}));
+    if (c.status === "em_andamento" && c.atendente) { dica = "Solução, andamento ou motivo da espera"; btns.push(acao("Resolver", "resolver", {forte:true, texto:true}), acao("Registrar andamento", "andamento", {texto:true}), acao("Aguardar cliente", "pausar", {texto:true})); }
     if (c.status === "aguardando_cliente") { dica = "Andamento"; btns.push(acao("Retomar", "retomar", {forte:true}), acao("Registrar andamento", "andamento", {texto:true})); }
     if (c.status === "resolvido") btns.push(acao("Encerrar", "encerrar", {forte:true}));
   } else if (["aberto","em_andamento","aguardando_cliente"].includes(c.status)) {
@@ -186,9 +199,10 @@ async function abrirChamado(cliente_id, numero) {
     el("p", {textContent:semHtml(c.descricao)}),
     el("dl", {className:"dados"},
       ...par("Tipo", TIPO[c.tipo]), ...par("Categoria", c.categoria), ...par("Origem", ORIGEM[c.origem]),
-      ...par("Solicitante", c.solicitante), ...par("Contato", contato), ...par("Atendente", c.atendente),
+      ...par("Solicitante", c.solicitante), ...par("Contato", contato), ...par("Atendente", c.atendente), ...par("Nível", c.nivel),
       ...par("Abertura", hora(c.aberto_em)), ...par("Resolução", hora(c.resolvido_em)), ...par("Encerramento", hora(c.encerrado_em))),
     el("div", {className:"acoes"}, ...(dica ? [el("textarea", {id:"texto", rows:2, placeholder:dica})] : []), ...btns),
+    ...blocoEscalar(c),
     ...blocoClassificacao(c),
     el("p", {id:"erro", className:"erro", role:"alert"}),
     el("h3", {textContent:"Prazos"}), ...blocoSla(c),

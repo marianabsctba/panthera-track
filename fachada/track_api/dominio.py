@@ -10,6 +10,8 @@ _TIPO_POR_ID = {v: k for k, v in TIPOS.items()}
 # Criadas no motor pela provisão, onde as regras e o e-mail também as enxergam.
 CATEGORIAS = {"acesso": "Acesso", "malware": "Malware", "rede": "Rede", "vazamento": "Vazamento de dados",
               "vulnerabilidade": "Vulnerabilidade", "disponibilidade": "Disponibilidade", "duvida": "Dúvida", "outro": "Outro"}
+# N1 é o atendimento normal, sem grupo: atribuir grupo na abertura tiraria o chamado de Aberto.
+NIVEIS = ("N1", "N2", "N3")
 PADRAO_TIPO = "^(incidente|requisicao)$"
 PADRAO_CATEGORIA = "^(" + "|".join(CATEGORIAS) + ")$"
 PADRAO_CRITICIDADE = "^(critica|alta|media|baixa|consulta)$"
@@ -68,11 +70,12 @@ def _resposta(abertura, minutos, respondido_em, agora):
     }
 
 
-def calcular_sla(chamado, agora=None, prazo_resposta_min=None):
+def calcular_sla(chamado, agora=None, prazo_resposta_min=None, primeira_resposta_em=None):
     """Horas corridas descontando só o tempo aguardando o cliente.
 
-    Prazos, pausa e hora da resposta vêm do motor. Aqui só se soma a pausa em curso, porque o motor adia o prazo
-    apenas quando o chamado sai dela, e o prazo da resposta, que a API dele não informa.
+    Prazo de resolução e pausa vêm do motor. Aqui se soma a pausa em curso, porque o motor adia o prazo apenas
+    quando o chamado sai dela, e se conta a primeira resposta: a API não informa esse prazo, e a hora que o motor
+    marca também muda ao atribuir grupo, o que faria um escalonamento automático parecer resposta.
     """
     agora = agora or datetime.now(timezone.utc)
     status = chamado["status"]["id"]
@@ -107,8 +110,13 @@ def calcular_sla(chamado, agora=None, prazo_resposta_min=None):
         "pausado": pausado,
         "estourado": estourado,
         "em_risco": em_risco,
-        "resposta": _resposta(abertura, prazo_resposta_min, _data(chamado.get("take_into_account_date")), agora),
+        "resposta": _resposta(abertura, prazo_resposta_min, primeira_resposta_em, agora),
     }
+
+
+def nivel_do_chamado(chamado):
+    grupos = {(m.get("group") or {}).get("name") for m in chamado.get("team") or [] if m.get("role") == "assigned"}
+    return next((n for n in reversed(NIVEIS) if n in grupos), NIVEIS[0])
 
 
 def representar(linha, chamado):
@@ -124,20 +132,22 @@ def representar(linha, chamado):
         "descricao": chamado["content"],
         "criticidade": linha["criticidade"],
         "status": STATUS[chamado["status"]["id"]],
+        "nivel": nivel_do_chamado(chamado),
         "solicitante": linha["solicitante"],
         "atendente": linha["atendente"],
         "contexto": linha["contexto"],
         "aberto_em": _iso(_data(chamado["date"])),
         "resolvido_em": _iso(_data(chamado.get("date_solve"))),
         "encerrado_em": _iso(_data(chamado.get("date_close"))),
-        "sla": calcular_sla(chamado, prazo_resposta_min=linha["prazo_resposta_min"]),
+        "sla": calcular_sla(chamado, prazo_resposta_min=linha["prazo_resposta_min"], primeira_resposta_em=linha["primeira_resposta_em"]),
     }
 
 
-def tempos_do_motor(chamado):
-    """As durações que o motor já mede."""
+def tempos_do_chamado(linha, chamado):
+    """As durações que o motor já mede, e o tempo até uma pessoa assumir."""
+    assumido = linha["primeira_resposta_em"]
     return {
-        "ate_assumir": int(chamado.get("take_into_account_duration") or 0),
+        "ate_assumir": int((assumido - _data(chamado["date"])).total_seconds()) if assumido else None,
         "aguardando_cliente": int(chamado.get("waiting_duration") or 0),
         "ate_resolver": int(chamado.get("resolution_duration") or 0),
         "ate_encerrar": int(chamado.get("close_duration") or 0),
