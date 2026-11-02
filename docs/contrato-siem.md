@@ -54,7 +54,8 @@ A mensagem assinada é `{data}.{MÉTODO}.{caminho com query}.{sha256 do corpo em
     "segundos_pausados": 0,
     "segundos_restantes": 14280,
     "pausado": false,
-    "estourado": false
+    "estourado": false,
+    "em_risco": false
   }
 }
 ```

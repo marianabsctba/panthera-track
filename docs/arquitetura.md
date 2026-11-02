@@ -9,7 +9,10 @@
 5. **O SLA é do motor.** A fachada só soma a pausa em curso, porque o motor adia o prazo apenas quando o chamado sai de Pendente.
 6. **O SLA nasce de regra de negócio do motor, por criticidade.** Assim vale para qualquer canal, inclusive e-mail, e a conta da fachada não precisa do direito de atribuir SLA.
 7. **Regras que precisam valer em todo canal ficam num plugin do motor.** E-mail e tarefas automáticas não passam pela fachada. O plugin ainda não existe: nesta fatia as regras estão na fachada.
-8. **Cada pessoa terá um usuário-sombra no motor**, com senha gerada e cifrada, e o login fica na fachada. Assim o histórico nativo registra o autor real.
+8. **Cada pessoa tem um usuário-sombra no motor**, com senha gerada e cifrada, e o login fica na fachada. Assim o histórico nativo registra o autor real. Quem escreve é o usuário-sombra; a leitura usa a conta da fachada, depois da permissão conferida aqui.
+9. **Login próprio com segundo fator obrigatório.** Senha com Argon2, troca da senha provisória na primeira entrada, aplicativo autenticador e códigos de recuperação. SSO pode entrar depois, sem mudar o resto.
+10. **Fila única para o analista.** Um login alcança os clientes vinculados. A fachada consulta cada instância em separado, indica o cliente em cada linha e põe na frente o que está mais perto de estourar. Um cliente fora do ar vira um aviso, sem tirar os outros da vista.
+11. **Criar pessoa é administração.** Exige acesso ao Docker e o papel dono do banco, que a API não tem.
 
 ## Componentes
 
@@ -28,6 +31,9 @@ Testado na versão 12.0.1:
 - O usuário criado pelo console entra com o perfil de autoatendimento. É preciso mandar o cabeçalho `GLPI-Profile`, senão o PATCH devolve 500 e o SLA é ignorado sem erro.
 - Client credentials não serve para chamados: a API exige usuário real, com grant de senha.
 - Criar o cliente OAuth exige rodar código dentro do motor, porque o segredo é cifrado com a chave dele.
+- Usuário com perfil de autoatendimento abre chamado e informa a prioridade; a regra de SLA dispara normalmente, e o motor não o deixa ler chamado alheio.
+- Trocar a prioridade recalcula o SLA pela regra.
+- Comentário do cliente em Pendente não tira o chamado da pausa: quem retoma é o analista.
 - A API não tem rota para o log de alterações do chamado. Mudanças feitas fora da fachada precisarão de webhook do motor ou do plugin.
 
 ## Mapeamentos
@@ -63,9 +69,11 @@ Testado na versão 12.0.1:
 | Histórico | Pronto para o que passa pela fachada |
 | Encerramento sem resolução por decisão do cliente | Falta |
 | Mudança de criticidade só com aceite do cliente | Falta |
-| Tela, login e pessoas do cliente abrindo chamados | Falta |
-| Usuários-sombra: hoje toda ação no motor sai como a conta da fachada; o autor real fica nos eventos | Falta |
-| Abertura por e-mail e registro de chamado por telefone | Falta |
+| Tela, login com segundo fator e pessoas do cliente abrindo chamados, testado com 15 pessoas ao mesmo tempo | Pronto |
+| Autor real no histórico, com usuários-sombra | Pronto para o que vem da tela; a API assinada segue com a conta da fachada |
+| Registro de chamado por telefone | Pronto |
+| Aviso de SLA em risco na fila, quando resta um quarto do prazo | Pronto |
+| Abertura por e-mail | Falta |
 | Aviso eletrônico a cada movimentação | Falta |
 | Busca por período, chamado, criticidade, situação e solicitante | Falta |
 | Exportação do histórico em JSON e relatório mensal | Falta |
@@ -79,3 +87,6 @@ O GLPI é GPL-3.0. Código que roda dentro dele, como o plugin, herda a GPL. A f
 - A assinatura vale por 5 minutos e não há controle de repetição. Reenviar uma ação é inofensivo porque a transição seguinte é recusada, exceto `andamento`, que registraria o texto de novo.
 - A chamada ao motor acontece dentro da transação da fachada. Se o commit falhar depois dela, o motor fica à frente até a próxima leitura. Na abertura, o reenvio reencontra o chamado pelo id externo.
 - A fachada ainda não tem TLS próprio nem proxy: roda em endereço local.
+- As tabelas de pessoas não têm RLS, porque o login precisa achar a pessoa antes de saber o cliente. O alcance é conferido na aplicação; chamados e eventos seguem com RLS.
+- O bloqueio por tentativas é por conta: alguém pode travar uma conta de propósito errando a senha, por 15 minutos.
+- A fila lista até 200 chamados por cliente, até existir a busca.

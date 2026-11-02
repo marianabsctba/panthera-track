@@ -1,0 +1,87 @@
+"""Regras do chamado, comuns à API assinada e à tela."""
+import json
+from html import escape
+
+from fastapi import HTTPException
+
+from . import banco
+from .dominio import CRITICIDADES, STATUS, representar
+from .motor import motor_do_cliente
+
+
+def html(texto):
+    return "<p>" + escape(texto) + "</p>"
+
+
+def registrar(conn, cliente_id, numero, tipo, autor, dados, pessoa_id=None):
+    seq = conn.execute(
+        "UPDATE chamados SET ultima_seq = ultima_seq + 1 WHERE numero = %s RETURNING ultima_seq",
+        (numero,)).fetchone()["ultima_seq"]
+    conn.execute(
+        "INSERT INTO eventos (cliente_id, numero, sequencia, tipo, autor, dados, pessoa_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (cliente_id, numero, seq, tipo, autor, json.dumps(dados, ensure_ascii=False), pessoa_id))
+
+
+def abrir(cliente, titulo, descricao, criticidade, solicitante, origem, escritor=None, id_externo=None, pessoa_id=None):
+    """Grava no motor com quem abriu e registra o primeiro evento. Sem escritor, usa a conta da fachada."""
+    leitor = motor_do_cliente(cliente)
+    escritor = escritor or leitor
+    nivel = CRITICIDADES[criticidade]
+    with banco.transacao(cliente["id"]) as conn:
+        if id_externo:
+            # A trava serializa reenvios simultâneos do mesmo alerta até o commit.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"{cliente['id']}:{id_externo}",))
+            linha = conn.execute("SELECT * FROM chamados WHERE id_externo = %s", (id_externo,)).fetchone()
+            if linha:
+                return representar(linha, leitor.chamado(linha["numero"])), False
+        campos = dict(name=titulo, content=html(descricao), type=1, urgency=nivel, impact=nivel, priority=nivel, entity=0)
+        if id_externo:
+            campos["external_id"] = id_externo
+        # Se caiu entre criar no motor e gravar aqui, o reenvio reencontra o mesmo chamado.
+        numero = (id_externo and leitor.buscar_externo(id_externo)) or escritor.criar_chamado(**campos)
+        linha = conn.execute(
+            """INSERT INTO chamados (cliente_id, numero, id_externo, origem, criticidade, solicitante, pessoa_solicitante)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+            (cliente["id"], numero, id_externo, origem, criticidade, solicitante, pessoa_id)).fetchone()
+        saida = representar(linha, leitor.chamado(numero))
+        registrar(conn, cliente["id"], numero, "aberto", solicitante, saida, pessoa_id)
+    return saida, True
+
+
+def transicao(cliente, numero, permitidos, tipo, autor, acao, escritor=None, pessoa_id=None, antes=None):
+    """Confere o status no motor, aplica a ação e registra o evento na mesma transação."""
+    leitor = motor_do_cliente(cliente)
+    with banco.transacao(cliente["id"]) as conn:
+        linha = conn.execute("SELECT * FROM chamados WHERE numero = %s FOR UPDATE", (numero,)).fetchone()
+        if not linha or (antes and not antes(linha)):
+            raise HTTPException(404, "Chamado não encontrado")
+        atual = leitor.chamado(numero)["status"]["id"]
+        if atual not in permitidos:
+            raise HTTPException(409, f"Ação não permitida com o chamado {STATUS[atual]}")
+        acao(escritor or leitor, conn)
+        linha = conn.execute("SELECT * FROM chamados WHERE numero = %s", (numero,)).fetchone()
+        saida = representar(linha, leitor.chamado(numero))
+        registrar(conn, cliente["id"], numero, tipo, autor, saida, pessoa_id)
+    return saida
+
+
+def historico(cliente, numero):
+    with banco.transacao(cliente["id"]) as conn:
+        eventos = conn.execute(
+            "SELECT sequencia, tipo, autor, criado_em, dados->>'status' AS status FROM eventos WHERE numero = %s ORDER BY sequencia",
+            (numero,)).fetchall()
+    with banco.transacao() as conn:
+        nomes = {x["motor_usuario"]: x["nome"] for x in conn.execute(
+            "SELECT s.motor_usuario, p.nome FROM sombras s JOIN pessoas p ON p.id = s.pessoa_id WHERE s.cliente_id = %s",
+            (cliente["id"],)).fetchall()}
+    interacoes = [{
+        "tipo": {"Followup": "acompanhamento", "Solution": "solucao"}.get(i["type"], "outro"),
+        "conteudo": i["item"].get("content"),
+        "autor": nomes.get((i["item"].get("user") or {}).get("username"), "Atendimento"),
+        "em": i["item"].get("date_creation"),
+    } for i in motor_do_cliente(cliente).linha_do_tempo(numero)]
+    return {
+        "numero": numero,
+        "eventos": [{**e, "criado_em": e["criado_em"].isoformat(timespec="seconds")} for e in eventos],
+        "interacoes": interacoes,
+    }

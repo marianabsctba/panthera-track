@@ -4,9 +4,10 @@ import time
 
 import httpx
 
-from .banco import decifrar
+from .banco import decifrar, transacao
 
 PERFIL_FACHADA = "6"  # Technician, na instalação padrão
+PERFIL_CLIENTE = "1"  # Self-Service, na instalação padrão
 
 
 class MotorIndisponivel(Exception):
@@ -59,6 +60,12 @@ class Motor:
     def chamado(self, numero):
         return self.pedir("GET", f"/Assistance/Ticket/{numero}")
 
+    def chamados(self, numeros):
+        if not numeros:
+            return []
+        lista = ",".join(str(int(n)) for n in numeros)
+        return self.pedir("GET", "/Assistance/Ticket", params={"filter": f"id=in=({lista})", "limit": len(numeros)})
+
     def buscar_externo(self, id_externo):
         achados = self.pedir("GET", "/Assistance/Ticket", params={"filter": f"external_id=={id_externo}"})
         return achados[0]["id"] if achados else None
@@ -82,9 +89,29 @@ _trava = threading.Lock()
 
 def motor_do_cliente(cliente):
     with _trava:
-        m = _motores.get(cliente["id"])
+        m = _motores.get(str(cliente["id"]))
         if m is None:
             m = Motor(cliente["motor_url"], cliente["motor_oauth_id"], decifrar(cliente["motor_oauth_segredo"]),
                       cliente["motor_usuario"], decifrar(cliente["motor_senha"]), perfil=PERFIL_FACHADA)
-            _motores[cliente["id"]] = m
+            _motores[str(cliente["id"])] = m
         return m
+
+
+def motor_da_pessoa(pessoa, cliente):
+    """Escreve no motor com o usuário-sombra, para o histórico nativo registrar o autor real."""
+    chave = (str(cliente["id"]), str(pessoa["id"]))
+    with _trava:
+        m = _motores.get(chave)
+    if m is not None:
+        return m
+    with transacao() as conn:
+        sombra = conn.execute("SELECT motor_usuario, motor_senha FROM sombras WHERE pessoa_id = %s AND cliente_id = %s",
+                              (pessoa["id"], cliente["id"])).fetchone()
+    if not sombra:
+        raise MotorIndisponivel("pessoa sem usuário na instância")
+    m = Motor(cliente["motor_url"], cliente["motor_oauth_id"], decifrar(cliente["motor_oauth_segredo"]),
+              sombra["motor_usuario"], decifrar(sombra["motor_senha"]),
+              perfil=PERFIL_FACHADA if pessoa["tipo"] == "analista" else PERFIL_CLIENTE)
+    with _trava:
+        _motores[chave] = m
+    return m

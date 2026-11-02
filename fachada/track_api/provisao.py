@@ -120,10 +120,10 @@ def _montar(identificador, pasta, nome, prazos, webhook_url):
     webhook_segredo = secrets.token_urlsafe(32) if webhook_url else None
     with psycopg.connect(os.environ["TRACK_BANCO_DONO_DSN"]) as conn:
         cliente_id = conn.execute(
-            """INSERT INTO clientes (nome, motor_url, motor_oauth_id, motor_oauth_segredo, motor_usuario, motor_senha,
+            """INSERT INTO clientes (nome, identificador, motor_url, motor_oauth_id, motor_oauth_segredo, motor_usuario, motor_senha,
                                      slas, webhook_url, webhook_segredo)
-               VALUES (%s, %s, %s, %s, 'fachada', %s, %s, %s, %s) RETURNING id""",
-            (nome, url, oauth["id"], cifrar(oauth["segredo"]), cifrar(senha_fachada), json.dumps(slas),
+               VALUES (%s, %s, %s, %s, %s, 'fachada', %s, %s, %s, %s) RETURNING id""",
+            (nome, identificador, url, oauth["id"], cifrar(oauth["segredo"]), cifrar(senha_fachada), json.dumps(slas),
              webhook_url, cifrar(webhook_segredo) if webhook_segredo else None)).fetchone()[0]
         for papel, c in credenciais.items():
             conn.execute("INSERT INTO credenciais (chave, cliente_id, segredo, papel) VALUES (%s, %s, %s, %s)",
