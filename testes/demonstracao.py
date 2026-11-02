@@ -80,10 +80,11 @@ class Tela(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/"):
             return self._repassar()
+        simbolo = self.path == "/estatico/pantera.webp"
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", "image/webp" if simbolo else "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(TELA.read_bytes())
+        self.wfile.write((TELA.with_name("pantera.webp") if simbolo else TELA).read_bytes())
 
     def do_POST(self):
         self._repassar()
