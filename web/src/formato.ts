@@ -25,7 +25,7 @@ export const CATEGORIAS: Record<string, string> = { acesso: "Acesso", malware: "
 export const ORIGENS: Record<string, string> = { siem: "SIEM", portal: "Portal", telefone: "Telefone", email: "E-mail" };
 export const EVENTOS: Record<string, string> = {
   aberto: "Abertura", em_andamento: "Em andamento", andamento: "Andamento registrado", comentario: "Comentário do cliente", aguardando_cliente: "Aguardando o cliente",
-  resolvido: "Resolução", encerrado: "Encerramento", escalado: "Escalado", classificado: "Classificação alterada", anexo: "Anexo incluído",
+  resolvido: "Resolução", encerrado: "Encerramento", escalado: "Escalado", classificado: "Classificação alterada", aceite_pedido: "Aceite pedido ao cliente", aceite_decidido: "Decisão do cliente", anexo: "Anexo incluído",
 };
 
 export const opcoes = (mapa: Record<string, string>) => Object.entries(mapa).map(([value, label]) => ({ value, label }));

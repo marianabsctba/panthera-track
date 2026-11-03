@@ -6,7 +6,7 @@ from html import escape
 from fastapi import HTTPException
 
 from . import banco
-from .dominio import CRITICIDADES, STATUS, TIPOS, pausas_dos_eventos, representar
+from .dominio import CRITICIDADES, ENCERRADO, STATUS, TIPOS, pausas_dos_eventos, representar
 from .motor import MotorIndisponivel, motor_do_cliente
 
 log = logging.getLogger("track.operacoes")
@@ -99,6 +99,14 @@ def assumir(conn, numero, atendente, pessoa_id=None):
     conn.execute(
         """UPDATE chamados SET atendente = %s, pessoa_atendente = %s, primeira_resposta_em = COALESCE(primeira_resposta_em, now())
            WHERE numero = %s""", (atendente, pessoa_id, numero))
+
+
+def encerrar(motor, conn, numero):
+    # Pedido em aberto não sobrevive ao encerramento: não haveria mais o que aceitar.
+    conn.execute(
+        """UPDATE aceites SET estado = 'recusado', decidido_por = 'Atendimento', decidido_em = now(),
+           comentario = 'Chamado encerrado antes da decisão' WHERE numero = %s AND estado = 'pendente'""", (numero,))
+    motor.mudar_status(numero, ENCERRADO)
 
 
 def _eventos(cliente, numero):

@@ -19,6 +19,7 @@ Usar o que o GLPI já faz e customizar só o que ele não tem.
 | Contexto do SIEM e contato de quem pediu | Nosso: o GLPI não guarda isso por chamado |
 | Trazer para a fila os chamados que nascem por e-mail | Nosso: a fila é da fachada, e o e-mail entra direto no motor |
 | Eventos com autor e motivo, e SHA-256 dos anexos | Nosso: a API do GLPI não expõe o log de alterações |
+| Pedido e decisão de aceite do cliente | Nosso: a validação nativa não deixa a pessoa do cliente responder pela API, e o modelo de e-mail dela revela a ferramenta. A mudança em si é nativa, e o motor recalcula o prazo |
 | Primeira resposta | Nosso: a API não informa o prazo, e o motor marca a tomada de conhecimento até em escalonamento automático |
 
 Antes de construir qualquer coisa, a pergunta é se o GLPI já faz.
@@ -41,7 +42,8 @@ Antes de construir qualquer coisa, a pergunta é se o GLPI já faz.
 14. **O status volta ao SIEM pelo webhook nativo**, que também pega mudanças feitas fora da fachada. Por isso o contrato é um aviso curto seguido de consulta, sem ordem garantida.
 15. **Escalonar muda quem atende, nunca a criticidade nem o prazo.** N1 é o atendimento normal, sem grupo, porque atribuir grupo na abertura tiraria o chamado de Aberto. Vencido o prazo, o motor manda para N2; passada mais metade do prazo, para N3. O analista também escala à mão, com motivo, sempre para cima. O nível é o grupo mais alto da equipe do chamado.
 16. **E-mail entra direto no motor, cada cliente com a própria caixa.** A caixa identifica o cliente, e só quem tem conta é aceito. A fachada adota esses chamados a cada 15 segundos, sem contexto nem tipo informado. Quem abre vira requerente e os gestores do cliente, observadores, e é assim que o motor sabe quem avisar.
-17. **Telefone e e-mail de contato não saem do chamado.** Não vão ao SIEM, à fila nem aos eventos, que são imutáveis: assim dá para apagar o contato depois sem mexer no histórico. O contexto do SIEM recusa campo desconhecido.
+17. **Mudar criticidade e encerrar sem resolução só valem com o aceite do gestor do cliente.** O analista pede com motivo, um pedido por vez, e o gestor aceita ou recusa, com tudo no histórico. Enquanto isso, nada muda. A permissão é conferida na fachada, e a conta dela grava no motor. Vale por enquanto só na fachada: a regra para qualquer canal é o plugin.
+18. **Telefone e e-mail de contato não saem do chamado.** Não vão ao SIEM, à fila nem aos eventos, que são imutáveis: assim dá para apagar o contato depois sem mexer no histórico. O contexto do SIEM recusa campo desconhecido.
 
 ## Componentes
 
@@ -110,8 +112,8 @@ Testado na versão 12.0.1:
 | Status de volta ao SIEM | Pronto, com o webhook nativo: assinado e com retentativa, até um minuto de atraso |
 | Isolamento entre clientes | Pronto |
 | Histórico | Eventos para o que passa pela fachada; o motor registra tudo, mas a API dele não expõe o log |
-| Encerramento sem resolução por decisão do cliente | Falta |
-| Mudança de criticidade só com aceite do cliente | Falta |
+| Encerramento sem resolução por decisão do cliente | Pronto na fachada |
+| Mudança de criticidade só com aceite do cliente | Pronto na fachada |
 | Tela, login com segundo fator e pessoas do cliente abrindo chamados, testado com 15 pessoas ao mesmo tempo | Pronto |
 | Autor real no histórico, com usuários-sombra | Pronto para o que vem da tela; a API assinada segue com a conta da fachada |
 | Registro de chamado por telefone | Pronto |
@@ -143,6 +145,7 @@ O GLPI é GPL-3.0. Código que roda dentro dele, como o plugin, herda a GPL. A f
 - Quem pede por telefone sem ter conta não recebe aviso: o motor só avisa usuários. Os gestores do cliente e a equipe recebem. O mesmo vale para o que vem do SIEM.
 - O assunto do aviso traz `[ALFA #0000004]`, com mais zeros que o código da tela, `ALFA-0004`. Os cabeçalhos técnicos do e-mail ainda podem citar a ferramenta; o assunto e o corpo não citam.
 - Mudança de status feita fora da fachada aparece na situação do chamado, mas não gera evento. Entra com o histórico completo.
+- O aceite só pode ser decidido por gestor: cliente sem gestor cadastrado fica sem quem decida. O gestor também não inicia o pedido; quem pede é o analista.
 - Sem antivírus nos anexos por enquanto: o download nunca abre na tela, mas quem baixa precisa de cuidado.
 - A API antiga fica ligada só para o envio de anexos, restrita à rede interna do Docker. Se a API nova passar a receber arquivo, ela sai.
 - O motivo de pausa ainda é texto livre. O motor tem motivos de pendência nativos, com lembrete e resolução automáticos, que podem entrar quando o processo de atendimento for definido.

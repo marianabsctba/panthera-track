@@ -65,6 +65,7 @@ def principal():
     sufixo = uuid.uuid4().hex[:8]
     conta = pessoas.criar("Verificador", f"verif-{sufixo}@exemplo.org", "analista", ["Cliente Alfa", "Cliente Beta"])
     cliente = pessoas.criar("Cleo Cliente", f"cleo-{sufixo}@exemplo.org", "cliente", ["Cliente Alfa"], "solicitante")
+    gestor = pessoas.criar("Gaia Gestora", f"gaia-{sufixo}@exemplo.org", "cliente", ["Cliente Alfa"], "gestor")
     senha_nova = "senha-" + uuid.uuid4().hex
     erros = []
     try:
@@ -125,6 +126,22 @@ def principal():
             pagina.wait_for_timeout(500)
             pagina.screenshot(path=capturas / "b-fila.png")
 
+            # Um chamado do Cliente Alfa fica com pedido aberto, para o gestor decidir depois
+            pagina.get_by_role("button", name="Registrar chamado").click()
+            dialogo = pagina.get_by_role("dialog")
+            dialogo.get_by_label("Quem pediu").fill("Rui")
+            dialogo.get_by_label("Título").fill("Reduzir criticidade deste")
+            dialogo.get_by_label("Descrição").fill("Chamado para o aceite do gestor.")
+            dialogo.get_by_role("button", name="Abrir chamado").click()
+            expect(pagina.get_by_test_id("titulo-chamado")).to_contain_text("Reduzir criticidade deste")
+            pagina.get_by_role("button", name="Mais ações").click()
+            pagina.get_by_role("menuitem", name="Pedir mudança de criticidade").click()
+            dialogo = pagina.get_by_role("dialog")
+            escolher(pagina, "Nova criticidade", "Baixa", dialogo)
+            dialogo.get_by_label("Motivo").fill("Impacto menor que o esperado")
+            dialogo.get_by_role("button", name="Pedir aceite").click()
+            expect(dialogo).to_be_hidden()
+
             # Registro por telefone
             pagina.get_by_role("button", name="Registrar chamado").click()
             dialogo = pagina.get_by_role("dialog")
@@ -177,6 +194,20 @@ def principal():
             confere("motivo do escalonamento aparece", lambda: expect(detalhe.get_by_text("N2: Precisa de análise forense", exact=True)).to_be_visible())
             confere("histórico guarda o SHA-256 do anexo", lambda: expect(detalhe).to_contain_text("SHA-256"))
 
+            # Aceite do cliente
+            pagina.get_by_role("button", name="Mais ações").click()
+            pagina.get_by_role("menuitem", name="Pedir mudança de criticidade").click()
+            dialogo = pagina.get_by_role("dialog")
+            confere("pedir aceite exige criticidade e motivo", lambda: expect(dialogo.get_by_role("button", name="Pedir aceite")).to_be_disabled())
+            escolher(pagina, "Nova criticidade", "Alta", dialogo)
+            dialogo.get_by_label("Motivo").fill("Afetou menos sistemas do que parecia")
+            dialogo.get_by_role("button", name="Pedir aceite").click()
+            expect(dialogo).to_be_hidden()
+            confere("analista vê que aguarda o cliente", lambda: expect(pagina.get_by_test_id("aceite")).to_contain_text("Aguardando aceite do cliente"))
+            confere("analista não tem botão de aceitar", lambda: expect(pagina.get_by_role("button", name="Aceitar")).to_be_hidden())
+            confere("fila marca o aguardo", lambda: expect(itens.filter(has_text="Ligação sobre").first).to_contain_text("Aguardando aceite"))
+            confere("criticidade não muda antes do aceite", lambda: expect(pagina.get_by_test_id("titulo-chamado").locator("xpath=..")).to_contain_text("Crítica"))
+
             pagina.get_by_role("button", name="Assumir atendimento").click()
             pagina.get_by_role("tab", name="Resumo").click()
             confere("assume em nome próprio", lambda: expect(dados).to_contain_text("Verificador"))
@@ -225,6 +256,21 @@ def principal():
             pagina.reload()
             confere("depois de sair, recarregar não entra", lambda: expect(pagina.get_by_role("button", name="Entrar")).to_be_visible())
 
+            # Gestor decide o aceite pedido lá em cima, num chamado ainda aberto
+            primeira_entrada(pagina, gestor, senha_nova)
+            pagina.get_by_role("button", name=re.compile("^Encerrado")).wait_for()
+            confere("gestor vê o chamado que aguarda a decisão dele", lambda: expect(itens.filter(has_text="Reduzir criticidade")).to_have_count(1))
+            itens.filter(has_text="Reduzir criticidade").click()
+            confere("gestor vê o pedido com os botões", lambda: (expect(pagina.get_by_test_id("aceite")).to_contain_text("Sua decisão é necessária"), expect(pagina.get_by_role("button", name="Aceitar")).to_be_visible()))
+            pagina.wait_for_timeout(300)
+            pagina.screenshot(path=capturas / "i-aceite.png")
+            pagina.get_by_role("button", name="Aceitar").click()
+            confere("aceite aplica a nova criticidade", lambda: expect(pagina.get_by_test_id("titulo-chamado").locator("xpath=..")).to_contain_text("Baixa"))
+            confere("pedido some depois de decidido", lambda: expect(pagina.get_by_test_id("aceite")).to_be_hidden())
+            pagina.get_by_role("button", name="Menu da conta").click()
+            pagina.get_by_role("menuitem", name="Sair").click()
+            expect(pagina.get_by_role("button", name="Entrar")).to_be_visible()
+
             # Pessoa do cliente
             primeira_entrada(pagina, cliente, senha_nova)
             confere("pessoa do cliente abre chamado", lambda: expect(pagina.get_by_role("button", name="Novo chamado")).to_be_visible())
@@ -253,6 +299,7 @@ def principal():
     finally:
         pessoas.desativar(conta["email"])
         pessoas.desativar(cliente["email"])
+        pessoas.desativar(gestor["email"])
 
     print(f"\n{len(falhas)} falha(s)" if falhas else "\ntudo certo")
     sys.exit(1 if falhas else 0)

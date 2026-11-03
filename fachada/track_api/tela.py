@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from pydantic import BaseModel, Field
 
 from . import banco, operacoes
-from .dominio import (ABERTO, AGUARDANDO_CLIENTE, CATEGORIAS, EM_ANDAMENTO, ENCERRADO, NIVEIS, PADRAO_CATEGORIA, PADRAO_CRITICIDADE,
+from .dominio import (ABERTO, AGUARDANDO_CLIENTE, CATEGORIAS, CRITICIDADES, EM_ANDAMENTO, ENCERRADO, NIVEIS, PADRAO_CATEGORIA, PADRAO_CRITICIDADE,
                       PADRAO_TIPO, RESOLVIDO, TIPOS, nivel_do_chamado, representar, tempos_do_chamado)
 from .motor import MotorIndisponivel, motor_da_pessoa, motor_do_cliente
 from .sessao import checar_origem, pessoa_pronta
@@ -19,6 +19,7 @@ from .sessao import checar_origem, pessoa_pronta
 router = APIRouter(prefix="/api/v1/tela", dependencies=[Depends(checar_origem)])
 _LIMITE_POR_CLIENTE = 200
 _TAMANHO_MAXIMO = 10 * 1024 * 1024
+_ROTULOS_CRITICIDADE = {"critica": "Crítica", "alta": "Alta", "media": "Média", "baixa": "Baixa", "consulta": "Consulta"}
 _ROTULOS_TIPO = {"incidente": "Incidente", "requisicao": "Requisição"}
 _EXTENSOES = {".pdf", ".png", ".jpg", ".jpeg", ".txt", ".log", ".csv", ".json", ".zip", ".eml", ".docx", ".xlsx", ".pcap"}
 
@@ -43,6 +44,17 @@ class Texto(BaseModel):
 class Escalonamento(BaseModel):
     nivel: str = Field(pattern="^(N2|N3)$")
     motivo: str = Field(min_length=1, max_length=65000)
+
+
+class PedidoDeAceite(BaseModel):
+    tipo: str = Field(pattern="^(criticidade|encerramento)$")
+    criticidade: Optional[str] = Field(default=None, pattern=PADRAO_CRITICIDADE)
+    motivo: str = Field(min_length=1, max_length=65000)
+
+
+class DecisaoDeAceite(BaseModel):
+    aceito: bool
+    comentario: Optional[str] = Field(default=None, max_length=65000)
 
 
 class Classificacao(BaseModel):
@@ -92,8 +104,10 @@ def _fila_do_cliente(pessoa, cliente):
         else:
             linhas = conn.execute("SELECT * FROM chamados WHERE pessoa_solicitante = %s ORDER BY numero DESC LIMIT %s",
                                   (pessoa["id"], _LIMITE_POR_CLIENTE)).fetchall()
+        pendentes = {a["numero"] for a in conn.execute("SELECT numero FROM aceites WHERE estado = 'pendente'").fetchall()}
     dados = {d["id"]: d for d in motor_do_cliente(cliente).chamados([x["numero"] for x in linhas])}
-    return [_do_cliente(representar(x, dados[x["numero"]]), cliente) for x in linhas if x["numero"] in dados]
+    return [{**_do_cliente(representar(x, dados[x["numero"]]), cliente), "aceite_pendente": x["numero"] in pendentes}
+            for x in linhas if x["numero"] in dados]
 
 
 def _ordem(chamado):
@@ -148,6 +162,15 @@ def _carregar(pessoa, cliente, numero):
     return linha
 
 
+def _aceites(cliente, numero):
+    with banco.transacao(cliente["id"]) as conn:
+        linhas = conn.execute(
+            """SELECT id, tipo, criticidade, motivo, pedido_por, pedido_em, estado, decidido_por, decidido_em, comentario
+               FROM aceites WHERE numero = %s ORDER BY pedido_em DESC""", (numero,)).fetchall()
+    return [{**a, "id": str(a["id"]), "pedido_em": a["pedido_em"].isoformat(timespec="seconds"),
+             "decidido_em": a["decidido_em"].isoformat(timespec="seconds") if a["decidido_em"] else None} for a in linhas]
+
+
 @router.get("/clientes/{cliente_id}/chamados/{numero}")
 def consultar(cliente_id: UUID, numero: int, pessoa=Depends(pessoa_pronta)):
     cliente = _cliente(pessoa, cliente_id)
@@ -155,7 +178,7 @@ def consultar(cliente_id: UUID, numero: int, pessoa=Depends(pessoa_pronta)):
     chamado = motor_do_cliente(cliente).chamado(numero)
     return {**_do_cliente(representar(linha, chamado), cliente),
             "contato": {"telefone": linha["contato_telefone"], "email": linha["contato_email"]},
-            "tempos": tempos_do_chamado(linha, chamado), "pausas": operacoes.pausas(cliente, numero, chamado["status"]["id"] == AGUARDANDO_CLIENTE), "anexos": operacoes.anexos(cliente, numero)}
+            "aceites": _aceites(cliente, numero), "tempos": tempos_do_chamado(linha, chamado), "pausas": operacoes.pausas(cliente, numero, chamado["status"]["id"] == AGUARDANDO_CLIENTE), "anexos": operacoes.anexos(cliente, numero)}
 
 
 @router.get("/clientes/{cliente_id}/chamados/{numero}/historico")
@@ -199,6 +222,65 @@ def escalar(cliente_id: UUID, numero: int, corpo: Escalonamento, pessoa=Depends(
         motor.acompanhamento(numero, operacoes.html(f"Escalado para {corpo.nivel}: {corpo.motivo}"))
     return _operar(pessoa, cliente_id, numero, {ABERTO, EM_ANDAMENTO, AGUARDANDO_CLIENTE}, "escalado", acao,
                    detalhe=f"{corpo.nivel}: {corpo.motivo}")
+
+
+@router.post("/clientes/{cliente_id}/chamados/{numero}/aceites", status_code=201)
+def pedir_aceite(cliente_id: UUID, numero: int, corpo: PedidoDeAceite, pessoa=Depends(_exigir_analista)):
+    if (corpo.tipo == "criticidade") != (corpo.criticidade is not None):
+        raise HTTPException(422, "Só a mudança de criticidade informa a nova criticidade")
+    if corpo.tipo == "criticidade":
+        resumo = f"Mudar a criticidade para {_ROTULOS_CRITICIDADE[corpo.criticidade]}"
+        permitidos = {ABERTO, EM_ANDAMENTO, AGUARDANDO_CLIENTE}
+    else:
+        resumo = "Encerrar sem resolução"
+        permitidos = {ABERTO, EM_ANDAMENTO, AGUARDANDO_CLIENTE, RESOLVIDO}
+    cliente = _cliente(pessoa, cliente_id)
+
+    def acao(motor, conn):
+        atual = conn.execute("SELECT criticidade FROM chamados WHERE numero = %s", (numero,)).fetchone()["criticidade"]
+        if corpo.criticidade == atual:
+            raise HTTPException(409, "O chamado já tem esta criticidade")
+        if conn.execute("SELECT 1 FROM aceites WHERE numero = %s AND estado = 'pendente'", (numero,)).fetchone():
+            raise HTTPException(409, "Já existe um pedido aguardando o cliente")
+        conn.execute(
+            "INSERT INTO aceites (cliente_id, numero, tipo, criticidade, motivo, pedido_por) VALUES (%s, %s, %s, %s, %s, %s)",
+            (cliente["id"], numero, corpo.tipo, corpo.criticidade, corpo.motivo, pessoa["nome"]))
+        # O acompanhamento é o que faz o motor avisar o cliente por e-mail.
+        motor.acompanhamento(numero, operacoes.html(f"Pedido de aceite: {resumo}. Motivo: {corpo.motivo}"))
+    return _operar(pessoa, cliente_id, numero, permitidos, "aceite_pedido", acao, detalhe=f"{resumo}: {corpo.motivo}")
+
+
+@router.post("/clientes/{cliente_id}/chamados/{numero}/aceites/{aceite_id}/decidir")
+def decidir_aceite(cliente_id: UUID, numero: int, aceite_id: UUID, corpo: DecisaoDeAceite, pessoa=Depends(pessoa_pronta)):
+    # Quem aceita é o cliente, nunca quem atende.
+    if pessoa["tipo"] != "cliente" or pessoa["papel"] != "gestor":
+        raise HTTPException(403, "Só o gestor do cliente decide")
+    cliente = _cliente(pessoa, cliente_id)
+    decisao = "Aceito" if corpo.aceito else "Recusado"
+    resumo = {}
+
+    def acao(motor, conn):
+        a = conn.execute(
+            """UPDATE aceites SET estado = %s, decidido_por = %s, pessoa_decisao = %s, decidido_em = now(), comentario = %s
+               WHERE id = %s AND numero = %s AND estado = 'pendente' RETURNING *""",
+            ("aceito" if corpo.aceito else "recusado", pessoa["nome"], pessoa["id"], corpo.comentario, aceite_id, numero)).fetchone()
+        if not a:
+            raise HTTPException(409, "Este pedido não está mais aguardando decisão")
+        alvo = _ROTULOS_CRITICIDADE[a["criticidade"]] if a["tipo"] == "criticidade" else None
+        resumo["texto"] = f"Mudar a criticidade para {alvo}" if alvo else "Encerrar sem resolução"
+        comentario = f" {corpo.comentario}" if corpo.comentario else ""
+        # A pessoa do cliente não tem direito de mudar isso no motor: a permissão foi conferida aqui, e a conta da fachada grava.
+        motor.acompanhamento(numero, operacoes.html(f"{decisao} por {pessoa['nome']}: {resumo['texto']}.{comentario}"))
+        if corpo.aceito and a["tipo"] == "criticidade":
+            motor.mudar_criticidade(numero, CRITICIDADES[a["criticidade"]])
+            conn.execute("UPDATE chamados SET criticidade = %s, prazo_resposta_min = %s WHERE numero = %s",
+                         (a["criticidade"], (cliente.get("prazos_resposta") or {}).get(a["criticidade"]), numero))
+        elif corpo.aceito:
+            motor.mudar_status(numero, ENCERRADO)
+
+    saida = operacoes.transicao(cliente, numero, {ABERTO, EM_ANDAMENTO, AGUARDANDO_CLIENTE, RESOLVIDO}, "aceite_decidido", pessoa["nome"], acao,
+                                pessoa_id=pessoa["id"], antes=_pode_ver(pessoa), detalhe=f"{decisao}{' ' + corpo.comentario if corpo.comentario else ''}")
+    return _do_cliente(saida, cliente)
 
 
 @router.post("/clientes/{cliente_id}/chamados/{numero}/classificar")
@@ -247,7 +329,7 @@ def resolver(cliente_id: UUID, numero: int, corpo: Texto, pessoa=Depends(_exigir
 def encerrar(cliente_id: UUID, numero: int, pessoa=Depends(_exigir_analista)):
     # Só sai de Resolvido: sem solução registrada, não há como encerrar.
     return _operar(pessoa, cliente_id, numero, {RESOLVIDO}, "encerrado",
-                   lambda motor, _c: motor.mudar_status(numero, ENCERRADO))
+                   lambda motor, conn: operacoes.encerrar(motor, conn, numero))
 
 
 def _nome_seguro(nome):

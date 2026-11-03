@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import banco, operacoes, sessao, sincronia, tela
-from .dominio import (ABERTO, AGUARDANDO_CLIENTE, EM_ANDAMENTO, ENCERRADO, PADRAO_CATEGORIA, PADRAO_CRITICIDADE, PADRAO_TIPO,
+from .dominio import (ABERTO, AGUARDANDO_CLIENTE, EM_ANDAMENTO, PADRAO_CATEGORIA, PADRAO_CRITICIDADE, PADRAO_TIPO,
                       RESOLVIDO, Contexto, representar)
 from .motor import MotorIndisponivel, motor_do_cliente
 
@@ -207,7 +207,7 @@ def resolver(numero: int, corpo: Texto, eu: Identidade = Depends(exigir_atendent
 def encerrar(numero: int, eu: Identidade = Depends(exigir_atendente)):
     # Só sai de Resolvido: sem solução registrada, não há como encerrar.
     return operacoes.transicao(eu.cliente, numero, {RESOLVIDO}, "encerrado", _quem(eu, numero),
-                               lambda motor, _c: motor.mudar_status(numero, ENCERRADO))
+                               lambda motor, conn: operacoes.encerrar(motor, conn, numero))
 
 
 @app.get("/api/v1/chamados/{numero}/historico")

@@ -62,7 +62,9 @@ export function useDados<T>(rota: string | null) {
 
 export interface Resposta { prazo: string; em: string | null; segundos_restantes: number; cumprida: boolean | null; estourada: boolean }
 export interface Sla { prazo: string | null; segundos_corridos: number; segundos_pausados: number; segundos_restantes: number | null; percentual: number | null; pausado: boolean; estourado: boolean | null; em_risco: boolean; resposta: Resposta | null }
+export interface Aceite { id: string; tipo: "criticidade" | "encerramento"; criticidade: string | null; motivo: string; pedido_por: string; pedido_em: string; estado: "pendente" | "aceito" | "recusado"; decidido_por: string | null; decidido_em: string | null; comentario: string | null }
 export interface Chamado {
+  aceite_pendente?: boolean;
   numero: number; codigo: string; cliente_id: string; cliente: string; origem: string; tipo: string; categoria: string | null; titulo: string; descricao: string;
   criticidade: string; status: string; nivel: string; solicitante: string; atendente: string | null; contexto: Record<string, string>;
   aberto_em: string; resolvido_em: string | null; encerrado_em: string | null; sla: Sla;
@@ -73,6 +75,7 @@ export interface ChamadoCompleto extends Chamado {
   contato: { telefone: string | null; email: string | null };
   tempos: { ate_assumir: number | null; aguardando_cliente: number; ate_resolver: number; ate_encerrar: number };
   pausas: Pausa[];
+  aceites: Aceite[];
   anexos: Anexo[];
 }
 export interface Historico {

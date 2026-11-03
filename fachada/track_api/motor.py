@@ -95,6 +95,10 @@ class Motor:
     def atribuir_grupo(self, numero, grupo):
         self.pedir("POST", f"/Assistance/Ticket/{numero}/TeamMember", json={"type": "Group", "id": grupo, "role": "assigned"})
 
+    def mudar_criticidade(self, numero, nivel):
+        # A regra do motor recalcula o prazo a partir da nova prioridade.
+        self.pedir("PATCH", f"/Assistance/Ticket/{numero}", json={"urgency": nivel, "impact": nivel, "priority": nivel})
+
     def acompanhamento(self, numero, texto):
         self.pedir("POST", f"/Assistance/Ticket/{numero}/Timeline/Followup", json={"content": texto})
 

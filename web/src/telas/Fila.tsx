@@ -1,4 +1,4 @@
-import { ActionIcon, Alert, Box, Button, Drawer, Group, Modal, ScrollArea, Select, SimpleGrid, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
+import { ActionIcon, Alert, Badge, Box, Button, Drawer, Group, Modal, ScrollArea, Select, SimpleGrid, Stack, Text, Textarea, TextInput, Tooltip, UnstyledButton } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import { IconRefresh } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
@@ -29,6 +29,7 @@ function ItemDaFila({ c, atual, mostrarCliente, aoClicar }: { c: Chamado; atual:
       <Group gap={6} mt={4} wrap="wrap">
         <Situacao valor={c.status} />
         {c.nivel !== "N1" && <Nivel valor={c.nivel} />}
+        {c.aceite_pendente && <Badge variant="outline" size="sm" radius="sm" color="yellow" tt="none" fw={500}>Aguardando aceite</Badge>}
         <Text size="xs" className={`sla ${sla.classe ?? ""}`}>{sla.texto}</Text>
       </Group>
       <Text size="xs" c="dimmed" mt={2}>{mostrarCliente ? `${c.cliente}, ` : ""}{ORIGENS[c.origem] ?? c.origem}, {quando(c.aberto_em)}</Text>

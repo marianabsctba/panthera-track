@@ -2,9 +2,9 @@ import { ActionIcon, Alert, Anchor, Button, FileButton, Group, Menu, Modal, Sele
 import { IconDots, IconPaperclip } from "@tabler/icons-react";
 import { useState } from "react";
 
-import { detalhe, enviar, enviarArquivo, useAnalista, useDados, type ChamadoCompleto, type Historico } from "../api";
+import { detalhe, enviar, enviarArquivo, useAnalista, useDados, useEu, type Aceite, type ChamadoCompleto, type Historico } from "../api";
 import { BarraDePrazo, Carregando, Criticidade, Data, Fato, Nivel, Situacao, Vazio } from "../componentes";
-import { CATEGORIAS, duracao, EVENTOS, opcoes, ORIGENS, quando, semHtml, TIPOS } from "../formato";
+import { CATEGORIAS, CRITICIDADES, duracao, EVENTOS, opcoes, ORIGENS, quando, semHtml, TIPOS } from "../formato";
 
 type Formulario = { titulo: string; rotulo: string; acao: string; botao: string; campo: string } | null;
 
@@ -79,6 +79,65 @@ function ModalDeClassificar({ aberto, c, aoEnviar, aoFechar }: { aberto: boolean
         </Group>
       </Stack>
     </Modal>
+  );
+}
+
+function ModalDePedido({ tipo, atual, aoEnviar, aoFechar }: { tipo: "criticidade" | "encerramento" | null; atual: string; aoEnviar: (acao: string, corpo: Record<string, string>) => Promise<string | null>; aoFechar: () => void }) {
+  const opcoesDeCriticidade = opcoes(CRITICIDADES).filter((o) => o.value !== atual);
+  const [criticidade, setCriticidade] = useState<string | null>(null);
+  const [motivo, setMotivo] = useState("");
+  const [erro, setErro] = useState<string | null>(null);
+  const fechar = () => { setCriticidade(null); setMotivo(""); setErro(null); aoFechar(); };
+  const confirmar = async () => {
+    const falha = await aoEnviar("aceites", { tipo: tipo!, motivo: motivo.trim(), ...(tipo === "criticidade" ? { criticidade: criticidade! } : {}) });
+    if (falha) setErro(falha);
+    else fechar();
+  };
+  return (
+    <Modal opened={tipo !== null} onClose={fechar} title={tipo === "criticidade" ? "Pedir mudança de criticidade" : "Pedir encerramento sem resolução"}>
+      <Stack gap="sm">
+        <Text size="sm" c="dimmed">Só vale depois do aceite do gestor do cliente.</Text>
+        {tipo === "criticidade" && <Select label="Nova criticidade" data={opcoesDeCriticidade} value={criticidade} onChange={setCriticidade} allowDeselect={false} comboboxProps={{ withinPortal: false }} />}
+        <Textarea label="Motivo" autosize minRows={3} maxRows={8} value={motivo} onChange={(e) => setMotivo(e.currentTarget.value)} data-autofocus />
+        {erro && <Alert color="red" variant="light" p="xs" fz="sm" role="alert">{erro}</Alert>}
+        <Group justify="flex-end">
+          <Button variant="subtle" color="gray" onClick={fechar}>Cancelar</Button>
+          <Button variant="filled" onClick={confirmar} disabled={!motivo.trim() || (tipo === "criticidade" && !criticidade)}>Pedir aceite</Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
+function AvisoDeAceite({ aceite, gestor, rota, aoMudar }: { aceite: Aceite; gestor: boolean; rota: string; aoMudar: () => void }) {
+  const [comentario, setComentario] = useState("");
+  const [erro, setErro] = useState<string | null>(null);
+  const decidir = async (aceito: boolean) => {
+    setErro(null);
+    const r = await enviar(`${rota}/aceites/${aceite.id}/decidir`, { aceito, ...(comentario.trim() ? { comentario: comentario.trim() } : {}) });
+    if (!r.ok) {
+      setErro(await detalhe(r));
+      return;
+    }
+    aoMudar();
+  };
+  const pedido = aceite.tipo === "criticidade" ? `Mudar a criticidade para ${CRITICIDADES[aceite.criticidade ?? ""] ?? ""}` : "Encerrar sem resolução";
+  return (
+    <Alert color="yellow" variant="light" p="sm" title={gestor ? "Sua decisão é necessária" : "Aguardando aceite do cliente"} data-testid="aceite">
+      <Stack gap="xs">
+        <Text size="sm" fw={500}>{pedido}</Text>
+        <Text size="sm" style={{ overflowWrap: "anywhere" }}>{aceite.motivo}</Text>
+        <Text size="xs" c="dimmed">{aceite.pedido_por}, {quando(aceite.pedido_em)}</Text>
+        {gestor && <TextInput label="Comentário" maxLength={1000} value={comentario} onChange={(e) => setComentario(e.currentTarget.value)} />}
+        {gestor && (
+          <Group gap="xs">
+            <Button variant="filled" onClick={() => decidir(true)}>Aceitar</Button>
+            <Button onClick={() => decidir(false)}>Recusar</Button>
+          </Group>
+        )}
+        {erro && <Text size="sm" c="red" role="alert">{erro}</Text>}
+      </Stack>
+    </Alert>
   );
 }
 
@@ -221,12 +280,14 @@ function AbaHistorico({ rota, versao }: { rota: string; versao: number }) {
 
 export function DetalheDoChamado({ clienteId, numero, aoMudar }: { clienteId: string; numero: number; aoMudar: () => void }) {
   const analista = useAnalista();
+  const eu = useEu();
   const rota = `/api/v1/tela/clientes/${clienteId}/chamados/${numero}`;
   const [versao, setVersao] = useState(0);
   const { dados: c, erro: erroDeLeitura, recarregar } = useDados<ChamadoCompleto>(rota);
   const [formulario, setFormulario] = useState<Formulario>(null);
   const [escalando, setEscalando] = useState(false);
   const [classificando, setClassificando] = useState(false);
+  const [pedindo, setPedindo] = useState<"criticidade" | "encerramento" | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [aba, setAba] = useState<string | null>("resumo");
 
@@ -246,6 +307,9 @@ export function DetalheDoChamado({ clienteId, numero, aoMudar }: { clienteId: st
   const emAtendimento = c.status === "em_andamento" && !!c.atendente;
   const podeEscalar = analista && ["aberto", "em_andamento", "aguardando_cliente"].includes(c.status) && c.nivel !== "N3";
   const podeClassificar = analista && c.status !== "encerrado";
+  const pendente = c.aceites.find((a) => a.estado === "pendente");
+  const podePedirCriticidade = analista && !pendente && ["aberto", "em_andamento", "aguardando_cliente"].includes(c.status);
+  const podePedirEncerramento = analista && !pendente && c.status !== "encerrado";
 
   return (
     <Stack gap="md">
@@ -270,12 +334,15 @@ export function DetalheDoChamado({ clienteId, numero, aoMudar }: { clienteId: st
               <Menu.Dropdown>
                 {podeEscalar && <Menu.Item fz="sm" onClick={() => setEscalando(true)}>Escalar</Menu.Item>}
                 {podeClassificar && <Menu.Item fz="sm" onClick={() => setClassificando(true)}>Classificar</Menu.Item>}
+                {podePedirCriticidade && <Menu.Item fz="sm" onClick={() => setPedindo("criticidade")}>Pedir mudança de criticidade</Menu.Item>}
+                {podePedirEncerramento && <Menu.Item fz="sm" onClick={() => setPedindo("encerramento")}>Pedir encerramento sem resolução</Menu.Item>}
               </Menu.Dropdown>
             </Menu>
           )}
         </Group>
       </Group>
       {erro && <Alert color="red" variant="light" p="xs" fz="sm" role="alert">{erro}</Alert>}
+      {pendente && <AvisoDeAceite aceite={pendente} gestor={eu.papel === "gestor"} rota={rota} aoMudar={atualizar} />}
 
       <Tabs value={aba} onChange={setAba}>
         <Tabs.List mb="md">
@@ -290,6 +357,7 @@ export function DetalheDoChamado({ clienteId, numero, aoMudar }: { clienteId: st
         <Tabs.Panel value="historico"><AbaHistorico rota={rota} versao={versao} /></Tabs.Panel>
       </Tabs>
 
+      <ModalDePedido key={c.criticidade} tipo={pedindo} atual={c.criticidade} aoEnviar={executar} aoFechar={() => setPedindo(null)} />
       <ModalDeTexto formulario={formulario} aoEnviar={executar} aoFechar={() => setFormulario(null)} />
       <ModalDeEscalar key={c.nivel} aberto={escalando} nivelAtual={c.nivel} aoEnviar={executar} aoFechar={() => setEscalando(false)} />
       {classificando && <ModalDeClassificar aberto c={c} aoEnviar={executar} aoFechar={() => setClassificando(false)} />}
